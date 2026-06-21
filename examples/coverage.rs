@@ -1,4 +1,4 @@
-//! Decoder-coverage census over *every* PlayMakerFSM in the game (indexed by `fsms.json`), not just one.
+//! Decoder-coverage census over *every* PlayMakerFSM in the game (indexed by `out/fsms_hkss.json`), not just one.
 //!
 //! For each FSM it decodes via [`playmakerfsm::model`] and tallies, per ActionData parameter type:
 //! how often it's used and how often the model fails to decode it (`ParamValue::Raw`). That answers
@@ -33,7 +33,7 @@ struct Stat {
 fn main() -> Result<()> {
     let env = utils::find_game("silksong")?.unwrap();
 
-    let index: Index = serde_json::from_str(&std::fs::read_to_string("fsms.json")?)?;
+    let index: Index = serde_json::from_str(&std::fs::read_to_string("out/fsms_hkss.json")?)?;
 
     // group by bundle so each is loaded & parsed only once
     let mut by_file: BTreeMap<&str, Vec<PathId>> = BTreeMap::new();
@@ -95,7 +95,7 @@ fn main() -> Result<()> {
     // ── report ──
     let total_params: usize = per_type.values().map(|s| s.total).sum();
     let total_raw: usize = per_type.values().map(|s| s.raw).sum();
-    println!("\n=== PlayMakerFSM decoder coverage over fsms.json ===");
+    println!("\n=== PlayMakerFSM decoder coverage over out/fsms_hkss.json ===");
     println!("bundles : {bundles_ok} ok, {bundles_err} failed to load");
     println!("FSMs    : {fsms_ok} ok, {fsms_err} failed to read");
     println!(
