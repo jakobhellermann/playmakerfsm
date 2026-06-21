@@ -425,6 +425,7 @@ dependencies = [
  "rabex-env",
  "serde",
  "serde-value",
+ "serde_json",
 ]
 
 [[package]]
