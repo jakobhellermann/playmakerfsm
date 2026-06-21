@@ -146,6 +146,7 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
         ParamValue::Enum(e) => fmt_enum(e),
         ParamValue::Array(a) => fmt_array(a),
         ParamValue::Property(p) => fmt_property(p),
+        ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.curve.m_Curve.len()),
         ParamValue::ArraySize(n) => format!("[{n} elems]"),
         ParamValue::Pptr(p) => fmt_pptr(p),
         ParamValue::Raw(bytes) => match longest_ascii_run(bytes) {

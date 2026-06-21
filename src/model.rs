@@ -9,6 +9,7 @@
 
 use crate::raw::*;
 use rabex_env::rabex::objects::PPtr;
+use std::borrow::Cow;
 
 /// Structured view of a whole FSM.
 pub struct FsmModel<'a> {
@@ -61,7 +62,8 @@ pub enum ParamValue<'a> {
     /// FsmEvent param; `None` = no event (`(none)`).
     Event(Option<String>),
 
-    Str(&'a str),
+    /// A raw `String` param: borrowed from `stringParams` (typed form) or owned (byteData form).
+    Str(Cow<'a, str>),
     FsmString(&'a FsmString),
     Owner(&'a FsmOwnerDefault),
     Var(&'a FsmVar),
@@ -73,6 +75,7 @@ pub enum ParamValue<'a> {
     Enum(&'a FsmEnum),
     Array(&'a FsmArray),
     Property(&'a FsmProperty),
+    AnimCurve(&'a FsmAnimationCurve),
     ArraySize(i32),
     /// Unity object reference (`ObjectReference`/`GameObject`).
     Pptr(&'a PPtr),
@@ -171,7 +174,20 @@ fn decode_param<'a>(
     let bd = &ad.byteData;
     let decoded = match type_name {
         "FsmString" => ad.fsmStringParams.get(pos).map(ParamValue::FsmString),
-        "String" => ad.stringParams.get(pos).map(|s| ParamValue::Str(s)),
+        // raw String has the same dual encoding: the bytes inline (size > 0) or `stringParams[pos]`.
+        "String" if size > 0 => Some(ParamValue::Str(
+            String::from_utf8_lossy(byte_slice(bd, pos, size))
+                .into_owned()
+                .into(),
+        )),
+        "String" => ad
+            .stringParams
+            .get(pos)
+            .map(|s| ParamValue::Str(Cow::Borrowed(s))),
+        // raw (non-Fsm) value types: plain floats packed in byteData, no useVariable byte.
+        "Vector2" => raw_floats(bd, pos, 2),
+        "Vector3" => raw_floats(bd, pos, 3),
+        "Vector4" | "Color" | "Rect" | "Quaternion" => raw_floats(bd, pos, 4),
         "FsmOwnerDefault" => ad.fsmOwnerDefaultParams.get(pos).map(ParamValue::Owner),
         "FsmVar" => ad.fsmVarParams.get(pos).map(ParamValue::Var),
         "FsmGameObject" => ad.fsmGameObjectParams.get(pos).map(ParamValue::GameObject),
@@ -196,17 +212,67 @@ fn decode_param<'a>(
         "Boolean" => Some(ParamValue::Bool(bd.get(pos).copied().unwrap_or(0) != 0)),
         "Integer" | "Enum" | "LayerMask" => read_i32(bd, pos).map(ParamValue::Int),
         "Float" => read_f32(bd, pos).map(ParamValue::Float),
-        "FsmBool" => Some(packed_scalar(bd, pos, size, Packed::Bool)),
-        "FsmInt" => Some(packed_scalar(bd, pos, size, Packed::Int)),
-        "FsmFloat" => Some(packed_scalar(bd, pos, size, Packed::Float)),
-        // value-type wrappers pack their floats into byteData (size == n*4 + useVariable byte [+ name]).
-        "FsmVector2" => Some(packed_vec(bd, pos, size, 2)),
-        "FsmVector3" => Some(packed_vec(bd, pos, size, 3)),
-        "FsmQuaternion" | "FsmColor" | "FsmRect" => Some(packed_vec(bd, pos, size, 4)),
-        // these carry no byteData (size 0): paramDataPos indexes the typed param array instead.
+        // Scalar/value wrappers have two encodings: byteData-packed (size > 0, `paramDataPos` = byte
+        // offset, `[value][useVariable][name]`) or — far more common — the typed param array (size 0,
+        // `paramDataPos` = array index). Both encode the same {useVariable, name, value}.
+        "FsmBool" if size > 0 => Some(packed_scalar(bd, pos, size, Packed::Bool)),
+        "FsmInt" if size > 0 => Some(packed_scalar(bd, pos, size, Packed::Int)),
+        "FsmFloat" if size > 0 => Some(packed_scalar(bd, pos, size, Packed::Float)),
+        "FsmVector2" if size > 0 => Some(packed_vec(bd, pos, size, 2)),
+        "FsmVector3" if size > 0 => Some(packed_vec(bd, pos, size, 3)),
+        "FsmQuaternion" | "FsmColor" | "FsmRect" if size > 0 => Some(packed_vec(bd, pos, size, 4)),
+        "FsmBool" => ad
+            .fsmBoolParams
+            .get(pos)
+            .map(|f| wrap(f.useVariable, &f.name, ParamValue::Bool(f.value != 0))),
+        "FsmInt" => ad
+            .fsmIntParams
+            .get(pos)
+            .map(|f| wrap(f.useVariable, &f.name, ParamValue::Int(f.value))),
+        "FsmFloat" => ad
+            .fsmFloatParams
+            .get(pos)
+            .map(|f| wrap(f.useVariable, &f.name, ParamValue::Float(f.value))),
+        "FsmVector2" => ad.fsmVector2Params.get(pos).map(|v| {
+            wrap(
+                v.useVariable,
+                &v.name,
+                ParamValue::Vector(vec![v.value.x, v.value.y]),
+            )
+        }),
+        "FsmVector3" => ad.fsmVector3Params.get(pos).map(|v| {
+            wrap(
+                v.useVariable,
+                &v.name,
+                ParamValue::Vector(vec![v.value.x, v.value.y, v.value.z]),
+            )
+        }),
+        "FsmQuaternion" => ad.fsmQuaternionParams.get(pos).map(|v| {
+            wrap(
+                v.useVariable,
+                &v.name,
+                ParamValue::Vector(vec![v.value.x, v.value.y, v.value.z, v.value.w]),
+            )
+        }),
+        "FsmColor" => ad.fsmColorParams.get(pos).map(|v| {
+            wrap(
+                v.useVariable,
+                &v.name,
+                ParamValue::Vector(vec![v.value.r, v.value.g, v.value.b, v.value.a]),
+            )
+        }),
+        "FsmRect" => ad.fsmRectParams.get(pos).map(|v| {
+            wrap(
+                v.useVariable,
+                &v.name,
+                ParamValue::Vector(vec![v.value.x, v.value.y, v.value.width, v.value.height]),
+            )
+        }),
+        // these always use the typed param array (no byteData form).
         "FsmEnum" => ad.fsmEnumParams.get(pos).map(ParamValue::Enum),
         "FsmArray" => ad.fsmArrayParams.get(pos).map(ParamValue::Array),
         "FsmProperty" => ad.fsmPropertyParams.get(pos).map(ParamValue::Property),
+        "FsmAnimationCurve" => ad.animationCurveParams.get(pos).map(ParamValue::AnimCurve),
         "FsmEvent" => Some(ParamValue::Event(if size == 0 {
             None
         } else {
@@ -215,6 +281,17 @@ fn decode_param<'a>(
         _ => None,
     };
     decoded.unwrap_or_else(|| ParamValue::Raw(byte_slice(bd, pos, size)))
+}
+
+/// Normalize a typed-array Fsm scalar/value wrapper: a variable binding becomes [`ParamValue::PackedVar`]
+/// (`None` if the bound name is empty), otherwise the supplied inline `value` — mirroring the byteData
+/// `[value][useVariable][name]` decode so both encodings render identically.
+fn wrap<'a>(use_var: u8, name: &str, value: ParamValue<'a>) -> ParamValue<'a> {
+    if use_var != 0 {
+        ParamValue::PackedVar((!name.is_empty()).then(|| name.to_string()))
+    } else {
+        value
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -270,6 +347,13 @@ fn packed_var(bd: &[u8], pos: usize, size: usize, valsize: usize) -> Option<Opti
     }
 }
 
+/// Raw value-type vector: `n` consecutive f32s in byteData, no useVariable byte. `None` if truncated.
+fn raw_floats(bd: &[u8], pos: usize, n: usize) -> Option<ParamValue<'static>> {
+    (0..n)
+        .map(|i| read_f32(bd, pos + i * 4))
+        .collect::<Option<Vec<f32>>>()
+        .map(ParamValue::Vector)
+}
 fn read_i32(bd: &[u8], pos: usize) -> Option<i32> {
     bd.get(pos..pos + 4)
         .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
