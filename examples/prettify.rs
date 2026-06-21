@@ -1,21 +1,12 @@
-//! Pretty-print a PlayMaker FSM: the state graph plus, per state, every action's class and its
-//! parameters decoded from the `ActionData` parallel-array encoding.
-//!
-//! ActionData stores all params of a state flat across `paramName/paramDataType/paramDataPos`, sliced
-//! per action by `actionStartIndex` (no trailing sentinel — the last action runs to the end). Reference
-//! params (FsmString, FsmOwnerDefault, FsmVar, …) live in a typed array that `paramDataPos` indexes;
-//! value primitives (Boolean/Integer/Float and the packed Fsm-wrappers/FsmEvent) live in the flat
-//! `byteData` at byte-offset `paramDataPos` (`paramByteDataSize` = length). The Fsm scalar wrappers pack
-//! as `[value(valsize)][useVariable(1)][name(rest)]`.
-//!
-//! Rust port of `HornetPlayer/tools/prettify-fsm` (which decodes rabex `… object … cat` JSON); here we
-//! work straight off the deserialized `Fsm` types.
-
+//! Pretty-print a PlayMaker FSM: the state graph plus, per state, every action's class and parameters.
 use std::fmt::Write;
 use std::io::IsTerminal;
 use std::sync::LazyLock;
 
 use anyhow::Result;
+use playmakerfsm::model::{
+    Action, FsmModel, ParamValue, State, Transition, decode_fsm, longest_ascii_run,
+};
 use playmakerfsm::raw::*;
 use rabex::objects::pptr::PathId;
 use rabex::{tpk::TpkTypeTreeBlob, typetree::typetree_cache::sync::TypeTreeCache};
@@ -32,200 +23,138 @@ fn main() -> Result<()> {
 
     let file = env.load_addressables_bundle_content(bundle)?;
     let fsm = file.object_at::<PlayMakerFSM>(path_id)?.read()?;
+    let fsm = decode_fsm(&fsm.fsm);
 
-    print!("{}", prettify_fsm(&fsm.fsm));
+    print!("{}", prettify_model(&fsm));
     Ok(())
 }
 
-// ── colors (auto-off when piped / NO_COLOR): event=yellow state=cyan action=green variable=magenta ──
-static COLOR: LazyLock<bool> =
-    LazyLock::new(|| std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none());
-
-fn paint(code: &str, s: &str) -> String {
-    if *COLOR {
-        format!("\x1b[{code}m{s}\x1b[0m")
-    } else {
-        s.to_string()
-    }
-}
-fn event(s: &str) -> String {
-    paint("33", s)
-}
-fn state(s: &str) -> String {
-    paint("36", s)
-}
-fn action(s: &str) -> String {
-    paint("32", s)
-}
-fn var(s: &str) -> String {
-    paint("35", s)
-}
-fn dim(s: &str) -> String {
-    paint("2", s)
-}
-
-pub fn prettify_fsm(fsm: &Fsm) -> String {
+pub fn prettify_model(m: &FsmModel) -> String {
     let mut o = String::new();
     let _ = writeln!(
         o,
         "FSM {:?}  start={:?}  states={}  events={}",
-        fsm.name,
-        fsm.startState,
-        fsm.states.len(),
-        fsm.events.len()
+        m.name,
+        m.start_state,
+        m.states.len(),
+        m.event_count
     );
 
-    let total_actions: usize = fsm
-        .states
-        .iter()
-        .map(|s| s.actionData.actionNames.len())
-        .sum();
-    if fsm.states.len() <= 1 && total_actions == 0 && fsm.events.is_empty() {
+    let total_actions: usize = m.states.iter().map(|s| s.actions.len()).sum();
+    if m.states.len() <= 1 && total_actions == 0 && m.event_count == 0 {
         let _ = writeln!(
             o,
             "  ⚠ STUB: empty graph, logic lives in C# — variable container only."
         );
     }
 
-    if !fsm.globalTransitions.is_empty() {
+    if !m.global_transitions.is_empty() {
         let _ = writeln!(o, "\nGLOBAL TRANSITIONS (from any state):");
-        for t in &fsm.globalTransitions {
-            let _ = writeln!(
-                o,
-                "  on {} -> {}",
-                event(&q(&t.fsmEvent.name)),
-                state(&q(&t.toState))
-            );
+        for t in &m.global_transitions {
+            write_transition(&mut o, t);
         }
     }
 
     let _ = writeln!(o, "\nSTATES:");
-    for s in &fsm.states {
-        let mark = if s.name == fsm.startState { "*" } else { " " };
-        let _ = writeln!(o, "\n {}[{}]", mark, state(&s.name));
-        for t in &s.transitions {
-            let _ = writeln!(
-                o,
-                "      on {} -> {}",
-                event(&q(&t.fsmEvent.name)),
-                state(&q(&t.toState))
-            );
-        }
-        let ad = &s.actionData;
-        for (ai, cls) in ad.actionNames.iter().enumerate() {
-            let dis = if ad.actionEnabled.get(ai) == Some(&0) {
-                "  (DISABLED)"
-            } else {
-                ""
-            };
-            // a user-given label (customNames) that differs from the class name is worth surfacing.
-            let custom = ad
-                .customNames
-                .get(ai)
-                .filter(|c| !c.is_empty() && c.as_str() != short(cls))
-                .map(|c| format!("  {}", dim(&format!("\"{c}\""))))
-                .unwrap_or_default();
-            let _ = writeln!(o, "      · {}{}{}", action(short(cls)), custom, dis);
-            for (name, tname, value) in decode_action(ad, ai) {
-                let val = if tname == "FsmEvent" && value != "(none)" {
-                    event(&value)
-                } else if value.starts_with("var ") {
-                    var(&value)
-                } else {
-                    value
-                };
-                let _ = writeln!(
-                    o,
-                    "          {} {} {}",
-                    name,
-                    dim(&format!(": {tname} =")),
-                    val
-                );
-            }
-        }
+    for s in &m.states {
+        write_state(&mut o, s);
     }
 
-    let named = named_vars(&fsm.variables);
-    if !named.is_empty() {
+    if !m.variables.is_empty() {
         let _ = writeln!(o, "\nVARIABLES:");
-        for (n, cat) in named {
-            let _ = writeln!(o, "  {} {}", dim(&format!("({cat})")), var(&n));
+        for v in &m.variables {
+            let _ = writeln!(o, "  {} {}", dim(&format!("({})", v.category)), var(v.name));
         }
     }
     o
 }
 
-/// Decode action `ai`'s params -> (fieldName, typeName, renderedValue).
-fn decode_action(ad: &ActionData, ai: usize) -> Vec<(String, &'static str, String)> {
-    let starts = &ad.actionStartIndex;
-    if ai >= starts.len() {
-        return vec![];
+fn write_transition(o: &mut String, t: &Transition) {
+    let _ = writeln!(
+        o,
+        "  on {} -> {}",
+        event(&q(t.event)),
+        state(&q(t.to_state))
+    );
+}
+
+fn write_state(o: &mut String, s: &State) {
+    let mark = if s.is_start { "*" } else { " " };
+    let _ = writeln!(o, "\n {}[{}]", mark, state(s.name));
+    for t in &s.transitions {
+        let _ = writeln!(
+            o,
+            "      on {} -> {}",
+            event(&q(t.event)),
+            state(&q(t.to_state))
+        );
     }
-    let lo = starts[ai] as usize;
-    // actionStartIndex has no end sentinel: the last action's params run to the end of the arrays.
-    let hi = starts
-        .get(ai + 1)
-        .map(|&x| x as usize)
-        .unwrap_or(ad.paramName.len());
-
-    (lo..hi)
-        .filter_map(|j| {
-            let dt = *ad.paramDataType.get(j)?;
-            let pos = *ad.paramDataPos.get(j)? as usize;
-            let size = ad.paramByteDataSize.get(j).copied().unwrap_or(0) as usize;
-            let tname = ptype(dt);
-            let field = ad
-                .paramName
-                .get(j)
-                .filter(|s| !s.is_empty())
-                .map(String::as_str)
-                .unwrap_or("·");
-            Some((field.to_string(), tname, render_param(ad, tname, pos, size)))
-        })
-        .collect()
+    for a in &s.actions {
+        write_action(o, a);
+    }
 }
 
-fn render_param(ad: &ActionData, tname: &str, pos: usize, size: usize) -> String {
-    let bd = &ad.byteData;
-    let opt = match tname {
-        "FsmString" => ad.fsmStringParams.get(pos).map(fmt_string),
-        "String" => ad.stringParams.get(pos).map(|s| format!("{s:?}")),
-        "FsmOwnerDefault" => ad.fsmOwnerDefaultParams.get(pos).map(fmt_owner),
-        "FsmVar" => ad.fsmVarParams.get(pos).map(fmt_var),
-        "FsmGameObject" => ad
-            .fsmGameObjectParams
-            .get(pos)
-            .map(|g| fmt_go(g.useVariable, &g.name, &g.value)),
-        "FsmObject" | "FsmMaterial" | "FsmTexture" => ad
-            .fsmObjectParams
-            .get(pos)
-            .map(|g| fmt_go(g.useVariable, &g.name, &g.value)),
-        "FsmEventTarget" => ad.fsmEventTargetParams.get(pos).map(fmt_event_target),
-        "FunctionCall" => ad.functionCallParams.get(pos).map(fmt_function),
-        "FsmTemplateControl" => ad.fsmTemplateControlParams.get(pos).map(fmt_template),
-        "Array" => ad.arrayParamSizes.get(pos).map(|n| format!("[{n} elems]")),
-        "ObjectReference" | "GameObject" => ad.unityObjectParams.get(pos).map(fmt_pptr),
-        "Boolean" => Some((bd.get(pos).copied().unwrap_or(0) != 0).to_string()),
-        "Integer" | "Enum" | "LayerMask" => read_i32(bd, pos).map(|v| v.to_string()),
-        "Float" => read_f32(bd, pos).map(|v| format!("{v}")),
-        "FsmBool" => Some(fmt_packed(bd, pos, size, Packed::Bool)),
-        "FsmInt" => Some(fmt_packed(bd, pos, size, Packed::Int)),
-        "FsmFloat" => Some(fmt_packed(bd, pos, size, Packed::Float)),
-        // value-type wrappers pack their floats into byteData (size == n*4 + useVariable byte [+ name]).
-        "FsmVector2" => Some(fmt_packed_vec(bd, pos, size, 2)),
-        "FsmVector3" => Some(fmt_packed_vec(bd, pos, size, 3)),
-        "FsmQuaternion" | "FsmColor" | "FsmRect" => Some(fmt_packed_vec(bd, pos, size, 4)),
-        // these carry no byteData (size 0): paramDataPos indexes the typed param array instead.
-        "FsmEnum" => ad.fsmEnumParams.get(pos).map(fmt_enum),
-        "FsmArray" => ad.fsmArrayParams.get(pos).map(fmt_array),
-        "FsmProperty" => ad.fsmPropertyParams.get(pos).map(fmt_property),
-        "FsmEvent" if size == 0 => Some("(none)".into()),
-        _ => ascii_run(bd, pos, size).map(|s| format!("→{s:?}")),
-    };
-    opt.unwrap_or_else(|| format!("({tname}, {size}B)"))
+fn write_action(o: &mut String, a: &Action) {
+    let dis = if a.enabled { "" } else { "  (DISABLED)" };
+    // a user-given label that differs from the class name is worth surfacing.
+    let custom = a
+        .custom_name
+        .filter(|c| *c != short(a.class))
+        .map(|c| format!("  {}", dim(&format!("\"{c}\""))))
+        .unwrap_or_default();
+    let _ = writeln!(o, "      · {}{}{}", action(short(a.class)), custom, dis);
+    for p in &a.params {
+        let s = fmt_value(&p.value, p.type_name);
+        let colored = match &p.value {
+            ParamValue::Event(Some(_)) => event(&s),
+            _ if s.starts_with("var ") => var(&s),
+            _ => s,
+        };
+        let name = if p.name.is_empty() { "·" } else { p.name };
+        let _ = writeln!(
+            o,
+            "          {} {} {}",
+            name,
+            dim(&format!(": {} =", p.type_name)),
+            colored
+        );
+    }
 }
 
-// ── per-type formatters ──────────────────────────────────────────────────────────────────────────
+fn fmt_value(v: &ParamValue, type_name: &str) -> String {
+    match v {
+        ParamValue::Bool(b) => b.to_string(),
+        ParamValue::Int(i) => i.to_string(),
+        ParamValue::Float(f) => format!("{f}"),
+        ParamValue::Vector(comps) => {
+            let parts: Vec<_> = comps.iter().map(|f| format!("{f}")).collect();
+            format!("({})", parts.join(", "))
+        }
+        ParamValue::PackedVar(Some(name)) => format!("var {name:?}"),
+        ParamValue::PackedVar(None) => "<var>".into(),
+        ParamValue::Event(Some(name)) => format!("→{name:?}"),
+        ParamValue::Event(None) => "(none)".into(),
+        ParamValue::Str(s) => format!("{s:?}"),
+        ParamValue::FsmString(s) => fmt_string(s),
+        ParamValue::Owner(ow) => fmt_owner(ow),
+        ParamValue::Var(fv) => fmt_var(fv),
+        ParamValue::GameObject(g) => fmt_go(g.useVariable, &g.name, &g.value),
+        ParamValue::Object(g) => fmt_go(g.useVariable, &g.name, &g.value),
+        ParamValue::EventTarget(t) => fmt_event_target(t),
+        ParamValue::Function(f) => fmt_function(f),
+        ParamValue::Template(t) => fmt_template(t),
+        ParamValue::Enum(e) => fmt_enum(e),
+        ParamValue::Array(a) => fmt_array(a),
+        ParamValue::Property(p) => fmt_property(p),
+        ParamValue::ArraySize(n) => format!("[{n} elems]"),
+        ParamValue::Pptr(p) => fmt_pptr(p),
+        ParamValue::Raw(bytes) => match longest_ascii_run(bytes) {
+            Some(s) => format!("→{s:?}"),
+            None => format!("({type_name}, {}B)", bytes.len()),
+        },
+    }
+}
+
 fn fmt_string(s: &FsmString) -> String {
     if s.useVariable != 0 && !s.name.is_empty() {
         format!("var {:?}", s.name)
@@ -353,74 +282,6 @@ fn fmt_template(t: &FsmTemplateControl) -> String {
     }
     parts.join(" ")
 }
-
-// ── byteData decoders ────────────────────────────────────────────────────────────────────────────
-fn read_i32(bd: &[u8], pos: usize) -> Option<i32> {
-    bd.get(pos..pos + 4)
-        .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
-}
-fn read_f32(bd: &[u8], pos: usize) -> Option<f32> {
-    bd.get(pos..pos + 4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-}
-#[derive(Clone, Copy)]
-enum Packed {
-    Bool,
-    Int,
-    Float,
-}
-/// Fsm scalar wrapper packed as [value(valsize)][useVariable(1)][name(rest)]. The wrapper type tells
-/// us how to read the value bytes — int vs float can't be guessed (a packed `1` reads as a denormal).
-fn fmt_packed(bd: &[u8], pos: usize, size: usize, kind: Packed) -> String {
-    let valsize = match kind {
-        Packed::Bool => 1,
-        Packed::Int | Packed::Float => 4,
-    };
-    if let Some(v) = packed_var_name(bd, pos, size, valsize) {
-        return v;
-    }
-    if size < valsize {
-        return format!("({size}B packed)");
-    }
-    match kind {
-        Packed::Bool => (bd.get(pos).copied().unwrap_or(0) != 0).to_string(),
-        Packed::Int => read_i32(bd, pos).map(|i| i.to_string()).unwrap_or_default(),
-        Packed::Float => read_f32(bd, pos)
-            .map(|f| format!("{f}"))
-            .unwrap_or_default(),
-    }
-}
-/// Fsm value-type wrapper packing `n` floats as [f32 × n][useVariable(1)][name(rest)].
-fn fmt_packed_vec(bd: &[u8], pos: usize, size: usize, n: usize) -> String {
-    let valsize = n * 4;
-    if let Some(v) = packed_var_name(bd, pos, size, valsize) {
-        return v;
-    }
-    if size < valsize {
-        return format!("({size}B packed)");
-    }
-    let comps: Vec<String> = (0..n)
-        .map(|i| {
-            read_f32(bd, pos + i * 4)
-                .map(|f| format!("{f}"))
-                .unwrap_or_default()
-        })
-        .collect();
-    format!("({})", comps.join(", "))
-}
-/// Shared packed-wrapper variable decode: if the useVariable byte after the value is set, the rest is
-/// the bound variable name. Returns None when the wrapper holds an inline value.
-fn packed_var_name(bd: &[u8], pos: usize, size: usize, valsize: usize) -> Option<String> {
-    if size > valsize && bd.get(pos + valsize).copied().unwrap_or(0) != 0 {
-        let name = ascii_only(bd, pos + valsize + 1, pos + size);
-        return Some(if name.is_empty() {
-            "<var>".into()
-        } else {
-            format!("var {name:?}")
-        });
-    }
-    None
-}
 fn fmt_enum(e: &FsmEnum) -> String {
     if e.useVariable != 0 && !e.name.is_empty() {
         format!("var {:?}", e.name)
@@ -450,121 +311,37 @@ fn fmt_property(p: &FsmProperty) -> String {
         format!("{}.{}", ty, p.PropertyName)
     }
 }
-fn ascii_only(bd: &[u8], lo: usize, hi: usize) -> String {
-    bd.get(lo..hi.min(bd.len()))
-        .unwrap_or(&[])
-        .iter()
-        .filter(|&&b| (32..127).contains(&b))
-        .map(|&b| b as char)
-        .collect()
+
+// ── colors (auto-off when piped / NO_COLOR): event=yellow state=cyan action=green variable=magenta ──
+static COLOR: LazyLock<bool> =
+    LazyLock::new(|| std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none());
+
+fn paint(code: &str, s: &str) -> String {
+    if *COLOR {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
-/// Longest printable-ASCII run (>=2) — surfaces packed var names / inline strings.
-fn ascii_run(bd: &[u8], pos: usize, size: usize) -> Option<String> {
-    let slice = bd.get(pos..(pos + size).min(bd.len()))?;
-    let (mut best, mut cur) = (String::new(), String::new());
-    for &b in slice {
-        if (32..127).contains(&b) {
-            cur.push(b as char);
-        } else {
-            if cur.len() > best.len() {
-                best = std::mem::take(&mut cur);
-            } else {
-                cur.clear();
-            }
-        }
-    }
-    if cur.len() > best.len() {
-        best = cur;
-    }
-    (best.len() >= 2).then_some(best)
+fn event(s: &str) -> String {
+    paint("33", s)
+}
+fn state(s: &str) -> String {
+    paint("36", s)
+}
+fn action(s: &str) -> String {
+    paint("32", s)
+}
+fn var(s: &str) -> String {
+    paint("35", s)
+}
+fn dim(s: &str) -> String {
+    paint("2", s)
 }
 
-// ── misc ─────────────────────────────────────────────────────────────────────────────────────────
 fn q(s: &str) -> String {
     format!("{s:?}")
 }
 fn short(cls: &str) -> &str {
     cls.rsplit('.').next().unwrap_or(cls)
-}
-
-const PARAM_TYPES: &[&str] = &[
-    "Integer",
-    "Boolean",
-    "Float",
-    "String",
-    "Color",
-    "ObjectReference",
-    "LayerMask",
-    "Enum",
-    "Vector2",
-    "Vector3",
-    "Vector4",
-    "Rect",
-    "Array",
-    "Character",
-    "AnimationCurve",
-    "FsmFloat",
-    "FsmInt",
-    "FsmBool",
-    "FsmString",
-    "FsmGameObject",
-    "FsmOwnerDefault",
-    "FunctionCall",
-    "FsmAnimationCurve",
-    "FsmEvent",
-    "FsmObject",
-    "FsmColor",
-    "Unsupported",
-    "GameObject",
-    "FsmVector3",
-    "LayoutOption",
-    "FsmRect",
-    "FsmEventTarget",
-    "FsmMaterial",
-    "FsmTexture",
-    "Quaternion",
-    "FsmQuaternion",
-    "FsmProperty",
-    "FsmVector2",
-    "FsmTemplateControl",
-    "FsmVar",
-    "CustomClass",
-    "FsmArray",
-    "FsmEnum",
-];
-fn ptype(i: i32) -> &'static str {
-    usize::try_from(i)
-        .ok()
-        .and_then(|i| PARAM_TYPES.get(i))
-        .copied()
-        .unwrap_or("?")
-}
-
-fn named_vars(v: &FsmVariables) -> Vec<(String, &'static str)> {
-    let mut out = Vec::new();
-    macro_rules! push {
-        ($field:ident, $label:literal) => {
-            for x in &v.$field {
-                if !x.name.is_empty() {
-                    out.push((x.name.clone(), $label));
-                }
-            }
-        };
-    }
-    push!(floatVariables, "float");
-    push!(intVariables, "int");
-    push!(boolVariables, "bool");
-    push!(stringVariables, "string");
-    push!(vector2Variables, "vector2");
-    push!(vector3Variables, "vector3");
-    push!(colorVariables, "color");
-    push!(rectVariables, "rect");
-    push!(quaternionVariables, "quaternion");
-    push!(gameObjectVariables, "gameObject");
-    push!(objectVariables, "object");
-    push!(materialVariables, "material");
-    push!(textureVariables, "texture");
-    push!(arrayVariables, "array");
-    push!(enumVariables, "enum");
-    out
 }
