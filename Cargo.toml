@@ -1,0 +1,15 @@
+[package]
+name = "playmakerfsm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rabex = "0.1"
+rabex-env = { version = "0.1", path = "../rabex-env" }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+anyhow = "1.0"
+serde-value = { git = "https://github.com/jakobhellermann/serde-value", branch = "preserve-order", features = [
+  "preserve_order",
+] }
