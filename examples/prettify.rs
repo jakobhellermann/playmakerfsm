@@ -274,21 +274,39 @@ fn fmt_template(t: &FsmTemplateControl) -> String {
             })
             .collect()
     };
-    let mut parts = vec![format!("template={}", t.target.m_PathID)];
-    let ins = vmap(&t.inputVariables, "<-");
-    if !ins.is_empty() {
+    let mut parts = Vec::new();
+    // the template pointer lives in `target` (Silksong) or `fsmTemplate` (Hollow Knight)
+    let template_id = t
+        .target
+        .as_ref()
+        .map(|p| p.m_PathID)
+        .or_else(|| t.fsmTemplate.as_ref().map(|p| p.m_PathID));
+    if let Some(id) = template_id {
+        parts.push(format!("template={id}"));
+    }
+    // variable overrides: split into in/out (Silksong) or a single list (Hollow Knight)
+    if let Some(ins) = t.inputVariables.as_deref().map(|v| vmap(v, "<-"))
+        && !ins.is_empty()
+    {
         parts.push(format!("in[{}]", ins.join(", ")));
     }
-    let outs = vmap(&t.outputVariables, "->");
-    if !outs.is_empty() {
+    if let Some(outs) = t.outputVariables.as_deref().map(|v| vmap(v, "->"))
+        && !outs.is_empty()
+    {
         parts.push(format!("out[{}]", outs.join(", ")));
     }
-    let evs: Vec<_> = t
-        .outputEvents
-        .iter()
-        .map(|e| format!("{}->{}", e.fromEvent.name, e.toEvent.name))
-        .collect();
-    if !evs.is_empty() {
+    if let Some(vars) = t.fsmVarOverrides.as_deref().map(|v| vmap(v, "="))
+        && !vars.is_empty()
+    {
+        parts.push(format!("vars[{}]", vars.join(", ")));
+    }
+    if let Some(evs) = t.outputEvents.as_deref().map(|events| {
+        events
+            .iter()
+            .map(|e| format!("{}->{}", e.fromEvent.name, e.toEvent.name))
+            .collect::<Vec<_>>()
+    }) && !evs.is_empty()
+    {
         parts.push(format!("events[{}]", evs.join(", ")));
     }
     parts.join(" ")

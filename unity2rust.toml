@@ -1,4 +1,7 @@
-game_path = "~/.steamapps/Hollow Knight Silksong"
+game_paths = [
+  "~/.steamapps/Hollow Knight",
+  "~/.steamapps/Hollow Knight Silksong",
+]
 scripts."PlayMaker.dll" = ["PlayMakerFSM"]
 field_ignores = [
   # noisy

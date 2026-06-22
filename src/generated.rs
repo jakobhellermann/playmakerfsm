@@ -31,13 +31,10 @@ pub struct Fsm {
     pub password: String,
     pub locked: u8,
     pub manualUpdate: u8,
-    pub outVariableIndices: Vec<i32>,
     pub keepDelayedEventsOnStateExit: u8,
     pub preprocessed: u8,
     pub ExposedEvents: Vec<FsmEvent>,
-    pub OutputEvents: Vec<FsmEvent>,
     pub RestartOnEnable: u8,
-    pub ResetVariablesOnEnable: u8,
     pub EnableDebugFlow: u8,
     pub EnableBreakpoints: u8,
     pub editorFlags: i32,
@@ -68,6 +65,15 @@ pub struct Fsm {
     pub handleLegacyNetworking: u8,
     pub handleAnimatorMove: u8,
     pub handleAnimatorIK: u8,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub outVariableIndices: Option<Vec<i32>>,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub OutputEvents: Option<Vec<FsmEvent>>,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub ResetVariablesOnEnable: Option<u8>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -106,8 +112,10 @@ pub struct FsmTransition {
     pub toState: String,
     pub linkStyle: u8,
     pub linkConstraint: u8,
-    pub linkTarget: u8,
     pub colorIndex: u8,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub linkTarget: Option<u8>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -361,11 +369,27 @@ pub struct FunctionCall {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct FsmTemplateControl {
-    pub targetType: i32,
-    pub target: PPtr, /* Object */
-    pub inputVariables: Vec<FsmVarOverride>,
-    pub outputVariables: Vec<FsmVarOverride>,
-    pub outputEvents: Vec<FsmEventMapping>,
+    // only in: Hollow Knight
+    #[serde(default)]
+    pub fsmTemplate: Option<TypedPPtr<FsmTemplate>>,
+    // only in: Hollow Knight
+    #[serde(default)]
+    pub fsmVarOverrides: Option<Vec<FsmVarOverride>>,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub targetType: Option<i32>,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub target: Option<PPtr>, /* Object */
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub inputVariables: Option<Vec<FsmVarOverride>>,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub outputVariables: Option<Vec<FsmVarOverride>>,
+    // only in: Hollow Knight Silksong
+    #[serde(default)]
+    pub outputEvents: Option<Vec<FsmEventMapping>>,
 }
 
 #[derive(Debug, serde::Deserialize)]
