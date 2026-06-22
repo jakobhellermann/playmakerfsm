@@ -1,4 +1,5 @@
 use anyhow::Result;
+use playmakerfsm::model::{Context, decode_fsm};
 use playmakerfsm::raw::PlayMakerFSM;
 use rabex::objects::pptr::PathId;
 use rabex_env::scene_lookup::SceneLookup;
@@ -20,10 +21,11 @@ fn main() -> Result<()> {
         )?
         .unwrap();
 
-    let object = file.object_at::<PlayMakerFSM>(path_id)?;
-    let item = object.read()?;
+    let item = file.object_at::<PlayMakerFSM>(path_id)?.read()?;
+    let mut ctx = Context::new(&file);
+    let model = decode_fsm(&item.fsm, &mut ctx);
 
-    println!("{:#?}", item);
+    println!("{}", serde_json::to_string_pretty(&model)?);
 
     Ok(())
 }
