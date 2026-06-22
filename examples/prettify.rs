@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use anyhow::Result;
 use playmakerfsm::model::{
-    Action, FsmModel, ParamValue, State, Transition, decode_fsm, longest_ascii_run,
+    Action, FsmModel, ParamValue, State, TemplateControl, Transition, decode_fsm, longest_ascii_run,
 };
 use playmakerfsm::raw::*;
 use rabex::objects::pptr::PathId;
@@ -259,10 +259,10 @@ fn fmt_function(f: &FunctionCall) -> String {
         format!("{}(<{}>)", f.FunctionName, f.parameterType)
     }
 }
-fn fmt_template(t: &FsmTemplateControl) -> String {
+fn fmt_template(t: &TemplateControl) -> String {
     // each override binds a template variable to a parent-FSM variable; `arrow` shows the data flow
     // (inputs: parent -> template, rendered `templateVar <- parentVar`; outputs: template -> parent, `->`).
-    let vmap = |entries: &[FsmVarOverride], arrow: &str| -> Vec<String> {
+    let vmap = |entries: &[&FsmVarOverride], arrow: &str| -> Vec<String> {
         entries
             .iter()
             .map(|e| {
@@ -274,39 +274,22 @@ fn fmt_template(t: &FsmTemplateControl) -> String {
             })
             .collect()
     };
-    let mut parts = Vec::new();
-    // the template pointer lives in `target` (Silksong) or `fsmTemplate` (Hollow Knight)
-    let template_id = t
-        .target
-        .as_ref()
-        .map(|p| p.m_PathID)
-        .or_else(|| t.fsmTemplate.as_ref().map(|p| p.m_PathID));
-    if let Some(id) = template_id {
-        parts.push(format!("template={id}"));
+    let mut parts = vec![format!("template={}", t.template)];
+    for (label, vars) in [
+        ("in", vmap(&t.inputs, "<-")),
+        ("out", vmap(&t.outputs, "->")),
+        ("vars", vmap(&t.overrides, "=")),
+    ] {
+        if !vars.is_empty() {
+            parts.push(format!("{label}[{}]", vars.join(", ")));
+        }
     }
-    // variable overrides: split into in/out (Silksong) or a single list (Hollow Knight)
-    if let Some(ins) = t.inputVariables.as_deref().map(|v| vmap(v, "<-"))
-        && !ins.is_empty()
-    {
-        parts.push(format!("in[{}]", ins.join(", ")));
-    }
-    if let Some(outs) = t.outputVariables.as_deref().map(|v| vmap(v, "->"))
-        && !outs.is_empty()
-    {
-        parts.push(format!("out[{}]", outs.join(", ")));
-    }
-    if let Some(vars) = t.fsmVarOverrides.as_deref().map(|v| vmap(v, "="))
-        && !vars.is_empty()
-    {
-        parts.push(format!("vars[{}]", vars.join(", ")));
-    }
-    if let Some(evs) = t.outputEvents.as_deref().map(|events| {
-        events
+    if !t.events.is_empty() {
+        let evs: Vec<_> = t
+            .events
             .iter()
-            .map(|e| format!("{}->{}", e.fromEvent.name, e.toEvent.name))
-            .collect::<Vec<_>>()
-    }) && !evs.is_empty()
-    {
+            .map(|(f, to)| format!("{f}->{to}"))
+            .collect();
         parts.push(format!("events[{}]", evs.join(", ")));
     }
     parts.join(" ")

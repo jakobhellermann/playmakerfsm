@@ -9,6 +9,7 @@
 
 use crate::raw::*;
 use rabex_env::rabex::objects::PPtr;
+use rabex_env::rabex::objects::pptr::PathId;
 use std::borrow::Cow;
 
 /// Structured view of a whole FSM.
@@ -71,7 +72,7 @@ pub enum ParamValue<'a> {
     Object(&'a FsmObject),
     EventTarget(&'a FsmEventTarget),
     Function(&'a FunctionCall),
-    Template(&'a FsmTemplateControl),
+    Template(TemplateControl<'a>),
     Enum(&'a FsmEnum),
     Array(&'a FsmArray),
     Property(&'a FsmProperty),
@@ -87,6 +88,18 @@ pub enum ParamValue<'a> {
 pub struct Variable<'a> {
     pub name: &'a str,
     pub category: &'static str,
+}
+
+/// A RunFSM template binding: the template to run plus how the parent FSM's variables and
+/// events are wired into it. Variable bindings are either directional ([`inputs`](Self::inputs)
+/// into the template, [`outputs`](Self::outputs) back out) or undirected
+/// ([`overrides`](Self::overrides)); the unused lists are empty.
+pub struct TemplateControl<'a> {
+    pub template: PathId,
+    pub inputs: Vec<&'a FsmVarOverride>,
+    pub outputs: Vec<&'a FsmVarOverride>,
+    pub overrides: Vec<&'a FsmVarOverride>,
+    pub events: Vec<(&'a str, &'a str)>,
 }
 
 /// Resolve a [`Fsm`] into the structured [`FsmModel`].
@@ -202,7 +215,7 @@ fn decode_param<'a>(
         "FsmTemplateControl" => ad
             .fsmTemplateControlParams
             .get(pos)
-            .map(ParamValue::Template),
+            .map(|t| ParamValue::Template(template_control(t))),
         "Array" => ad
             .arrayParamSizes
             .get(pos)
@@ -291,6 +304,33 @@ fn wrap<'a>(use_var: u8, name: &str, value: ParamValue<'a>) -> ParamValue<'a> {
         ParamValue::PackedVar((!name.is_empty()).then(|| name.to_string()))
     } else {
         value
+    }
+}
+
+fn var_overrides(v: &Option<Vec<FsmVarOverride>>) -> Vec<&FsmVarOverride> {
+    v.as_deref().unwrap_or_default().iter().collect()
+}
+
+fn template_control(t: &FsmTemplateControl) -> TemplateControl<'_> {
+    // the template pointer is stored under one of two field names across encodings
+    let template = t
+        .target
+        .as_ref()
+        .map(|p| p.m_PathID)
+        .or_else(|| t.fsmTemplate.as_ref().map(|p| p.m_PathID))
+        .unwrap_or_default();
+    TemplateControl {
+        template,
+        inputs: var_overrides(&t.inputVariables),
+        outputs: var_overrides(&t.outputVariables),
+        overrides: var_overrides(&t.fsmVarOverrides),
+        events: t
+            .outputEvents
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| (e.fromEvent.name.as_str(), e.toEvent.name.as_str()))
+            .collect(),
     }
 }
 
