@@ -7,16 +7,96 @@
 //! list produced by the matching `make out/fsms_*.json` target.
 
 use anyhow::Result;
-use playmakerfsm::model::{Context, decode_fsm};
+use dotnetdll::prelude::*;
+use dotnetdll::resolved::members::Constant;
+use dotnetdll::resolved::types::{BaseType, MemberType, TypeSource, UserType};
+use playmakerfsm::model::{Context, FsmModel, ParamValue, decode_fsm};
 use playmakerfsm::raw::*;
 use rabex::objects::ClassId;
 use rabex::objects::pptr::PathId;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::sync::Mutex;
+
+/// `(action class full name, field name)` -> `{enum int value -> member name}`, built from the game
+/// assembly. Plain C# enum params store only an int + the generic `Enum` type tag, so the member
+/// name is recovered here and baked into the model at build time.
+type EnumMap = HashMap<(String, String), HashMap<i32, String>>;
+
+/// If `ty` is a same-assembly (Definition) enum, its `{value -> member}` table, else `None`.
+fn enum_members(res: &Resolution, ty: &MemberType) -> Option<HashMap<i32, String>> {
+    let MemberType::Base(b) = ty else { return None };
+    let BaseType::Type {
+        source: TypeSource::User(UserType::Definition(idx)),
+        ..
+    } = b.as_ref()
+    else {
+        return None;
+    };
+    let td = &res[*idx];
+    // every enum has a synthetic `value__` field holding the underlying value
+    if !td.fields.iter().any(|f| f.name == "value__") {
+        return None;
+    }
+    let members: HashMap<i32, String> = td
+        .fields
+        .iter()
+        .filter(|f| f.literal)
+        .filter_map(|f| match &f.default {
+            Some(Constant::Int32(v)) => Some((*v, f.name.to_string())),
+            _ => None,
+        })
+        .collect();
+    (!members.is_empty()).then_some(members)
+}
+
+/// Map every action field whose type is a same-assembly enum to its `{value -> member}` table.
+fn build_enum_map(managed: &Path) -> EnumMap {
+    let mut map = EnumMap::new();
+    let Ok(bytes) = std::fs::read(managed.join("Assembly-CSharp.dll")) else {
+        return map;
+    };
+    let Ok(res) = Resolution::parse(&bytes, ReadOptions::default()) else {
+        return map;
+    };
+    for (_idx, td) in res.enumerate_type_definitions() {
+        let class = match &td.namespace {
+            Some(ns) if !ns.is_empty() => format!("{ns}.{}", td.name),
+            _ => td.name.to_string(),
+        };
+        for f in &td.fields {
+            if let Some(members) = enum_members(&res, &f.return_type) {
+                map.insert((class.clone(), f.name.to_string()), members);
+            }
+        }
+    }
+    map
+}
+
+/// Replace `Enum`-typed int params with their resolved member name where the assembly map knows it.
+fn bake_enums(model: &mut FsmModel<'_>, map: &EnumMap) {
+    for state in &mut model.states {
+        for action in &mut state.actions {
+            for param in &mut action.params {
+                if param.type_name != "Enum" {
+                    continue;
+                }
+                let ParamValue::Int(v) = param.value else {
+                    continue;
+                };
+                let key = (action.class.to_string(), param.name.to_string());
+                if let Some(name) = map.get(&key).and_then(|m| m.get(&v)) {
+                    param.value = ParamValue::EnumMember(Cow::Owned(name.clone()));
+                }
+            }
+        }
+    }
+}
 
 mod utils;
 
@@ -59,6 +139,8 @@ fn main() -> Result<()> {
     };
 
     let env = utils::find_game(game)?.unwrap();
+    let enum_map = build_enum_map(&env.game_files.game_dir.join("Managed"));
+    eprintln!("enum map: {} action fields", enum_map.len());
     let input: Input = serde_json::from_str(&std::fs::read_to_string(input_path)?)?;
 
     let mut by_file: BTreeMap<&str, Vec<(PathId, &str)>> = BTreeMap::new();
@@ -113,6 +195,7 @@ fn main() -> Result<()> {
             if template.is_some() {
                 model.name = &pm.fsm.name;
             }
+            bake_enums(&mut model, &enum_map);
             let Ok(json) = serde_json::to_vec(&model) else {
                 continue;
             };

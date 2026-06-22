@@ -451,6 +451,7 @@ name = "playmakerfsm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dotnetdll",
  "rabex",
  "rabex-env",
  "rayon",

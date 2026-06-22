@@ -232,6 +232,9 @@ pub enum ParamValue<'a> {
     Function(Call<'a>),
     Template(TemplateControl<'a>),
     Enum(EnumValue),
+    /// A plain C# enum param resolved to its member name (e.g. `operation` -> "Multiply"). The enum
+    /// type isn't in the FSM data, so this is filled in at content-build time from the game assembly.
+    EnumMember(Cow<'a, str>),
     Array(ArrayValue),
     Property(Property<'a>),
     AnimCurve(Curve),

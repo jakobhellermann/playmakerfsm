@@ -168,6 +168,7 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
         ParamValue::Function(f) => fmt_function(f),
         ParamValue::Template(t) => fmt_template(t),
         ParamValue::Enum(e) => fmt_enum(e),
+        ParamValue::EnumMember(m) => m.to_string(),
         ParamValue::Array(a) => fmt_array(a),
         ParamValue::Property(p) => fmt_property(p),
         ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.keys.len()),
