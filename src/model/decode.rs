@@ -321,7 +321,7 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
         states: fsm
             .states
             .iter()
-            .map(|s| decode_state(s, &fsm.startState, &mut *ctx))
+            .map(|s| decode_state(s, &fsm.startState, fsm.dataVersion, &mut *ctx))
             .collect(),
         variables: decode_variables(&fsm.variables),
     }
@@ -337,6 +337,7 @@ fn transition(t: &FsmTransition) -> Transition<'_> {
 fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
     s: &'a FsmState,
     start: &str,
+    version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> State<'a> {
     let ad = &s.actionData;
@@ -352,7 +353,7 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
                 .filter(|c| !c.is_empty())
                 .map(String::as_str),
             enabled: ad.actionEnabled.get(ai) != Some(&0),
-            params: decode_params(ad, ai, &mut *ctx),
+            params: decode_params(ad, ai, version, &mut *ctx),
         })
         .collect();
     State {
@@ -367,6 +368,7 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
 fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
     ad: &'a ActionData,
     ai: usize,
+    version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> Vec<Param<'a>> {
     let starts = &ad.actionStartIndex;
@@ -383,7 +385,7 @@ fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
     let mut j = lo as usize;
     while j < hi {
         let before = j;
-        match decode_one(ad, &mut j, hi, ctx) {
+        match decode_one(ad, &mut j, hi, version, ctx) {
             Some(p) => out.push(p),
             None => break,
         }
@@ -400,6 +402,7 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
     ad: &'a ActionData,
     j: &mut usize,
     hi: usize,
+    version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> Option<Param<'a>> {
     let dt = *ad.paramDataType.get(*j)?;
@@ -416,13 +419,13 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
             if *j >= hi {
                 break;
             }
-            if let Some(child) = decode_one(ad, j, hi, ctx) {
+            if let Some(child) = decode_one(ad, j, hi, version, ctx) {
                 elems.push(child);
             }
         }
         ParamValue::List(elems)
     } else {
-        decode_param(ad, type_name, pos, size, ctx)
+        decode_param(ad, type_name, pos, size, version, ctx)
     };
     Some(Param {
         name,
@@ -436,6 +439,7 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
     type_name: &str,
     pos: usize,
     size: usize,
+    version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> ParamValue<'a> {
     let bd = &ad.byteData;
@@ -577,7 +581,14 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
             .animationCurveParams
             .get(pos)
             .map(|c| ParamValue::AnimCurve(curve(c))),
-        "FsmEvent" => Some(ParamValue::Event(if size == 0 {
+        // FsmEvent: in dataVersion 1 the event name is packed into byteData; from version 2 on it
+        // lives in `stringParams[pos]` (an empty entry means no event), like the raw `String` type.
+        "FsmEvent" => Some(ParamValue::Event(if version > 1 {
+            ad.stringParams
+                .get(pos)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        } else if size == 0 {
             None
         } else {
             longest_ascii_run(byte_slice(bd, pos, size))
