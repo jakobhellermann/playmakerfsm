@@ -101,6 +101,8 @@ fn write_action(o: &mut String, a: &Action) {
         .map(|c| format!("  {}", dim(&format!("\"{c}\""))))
         .unwrap_or_default();
     let _ = writeln!(o, "      · {}{}{}", action(short(a.class)), custom, dis);
+    // array elements follow their `Array` entry flat in the param list; indent them under it.
+    let mut array_remaining = 0usize;
     for p in &a.params {
         let s = fmt_value(&p.value, p.type_name);
         let colored = match &p.value {
@@ -109,13 +111,23 @@ fn write_action(o: &mut String, a: &Action) {
             _ => s,
         };
         let name = if p.name.is_empty() { "·" } else { p.name };
+        let indent = if array_remaining > 0 {
+            array_remaining -= 1;
+            "              "
+        } else {
+            "          "
+        };
         let _ = writeln!(
             o,
-            "          {} {} {}",
+            "{}{} {} {}",
+            indent,
             name,
             dim(&format!(": {} =", p.type_name)),
             colored
         );
+        if let ParamValue::ArraySize(n) = &p.value {
+            array_remaining = *n as usize;
+        }
     }
 }
 
