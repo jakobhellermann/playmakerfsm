@@ -95,10 +95,24 @@ fn main() -> Result<()> {
             let ClassId::MonoBehaviour = obj.class_id() else {
                 continue;
             };
-            let Ok(fsm) = obj.read() else {
+            let Ok(pm) = obj.read() else {
                 continue;
             };
-            let model = decode_fsm(&fsm.fsm, &mut ctx);
+            // A component that uses a template usually has it baked into its inline `fsm`, so keep
+            // that. But some instances are bare stubs — exactly one empty state, no transitions, no
+            // actions; for those, follow the template pointer to recover the real FSM.
+            let stub = pm.fsmTemplate.m_PathID != 0
+                && matches!(pm.fsm.states.as_slice(), [s]
+                    if s.actionData.actionNames.is_empty() && s.transitions.is_empty());
+            let template = stub
+                .then(|| handle.deref_read::<FsmTemplate>(pm.fsmTemplate).ok())
+                .flatten();
+            let mut model = decode_fsm(template.as_ref().map_or(&pm.fsm, |t| &t.fsm), &mut ctx);
+            // a resolved stub carries the template's internal name (e.g. "Spell Control"); show the
+            // component's own name ("Bind") instead — the template is just where the FSM comes from.
+            if template.is_some() {
+                model.name = &pm.fsm.name;
+            }
             let Ok(json) = serde_json::to_vec(&model) else {
                 continue;
             };
@@ -115,7 +129,9 @@ fn main() -> Result<()> {
             local.push(Entry {
                 file: file.to_string(),
                 path_id: id,
-                name: model.name.to_string(),
+                // the component's own FSM name (for stubs this is the instance name, e.g. "Bind",
+                // not the template's internal name) so the browser lists it as authored.
+                name: pm.fsm.name.to_string(),
                 game_object: game_object_path(label).to_string(),
                 hash,
             });
