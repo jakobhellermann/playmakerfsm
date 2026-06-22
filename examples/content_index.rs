@@ -129,8 +129,26 @@ fn main() -> Result<()> {
     let index_path = std::path::Path::new(out_dir).join("index.json");
     std::fs::write(&index_path, serde_json::to_vec_pretty(&entries)?)?;
 
+    // Prune content files left over from earlier runs: the store is content-addressed, so any
+    // `<hash>.json` not (re)written this run is orphaned (no index entry points at it).
+    let mut pruned = 0usize;
+    for entry in std::fs::read_dir(&content_dir)?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let referenced = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| written.contains(stem));
+        if !referenced {
+            std::fs::remove_file(&path)?;
+            pruned += 1;
+        }
+    }
+
     println!(
-        "{} fsms -> {} distinct models in {}/, index in {} ({:.1}s)",
+        "{} fsms -> {} distinct models in {}/ ({pruned} stale pruned), index in {} ({:.1}s)",
         entries.len(),
         written.len(),
         content_dir.display(),
