@@ -8,9 +8,278 @@
 // The Fsm scalar/value wrappers pack as `[value(n)][useVariable(1)][name(rest)]`.
 
 use crate::raw::*;
+use rabex_env::component_path::ComponentPath;
+use rabex_env::handle::SerializedFileHandle;
+use rabex_env::qualify::Qualifier;
 use rabex_env::rabex::objects::PPtr;
 use rabex_env::rabex::objects::pptr::PathId;
+use rabex_env::rabex::typetree::TypeTreeProvider;
+use rabex_env::resolver::EnvResolver;
 use std::borrow::Cow;
+
+/// Decoding context: resolves object pointers to stable [`ObjectRef`]s. Created per serialized file
+/// and reused across the FSMs in it.
+pub struct Context<'a, R, P> {
+    qualifier: Qualifier<'a, R, P>,
+}
+
+impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
+    pub fn new(handle: &SerializedFileHandle<'a, R, P>) -> Self {
+        Context {
+            qualifier: Qualifier::new(handle),
+        }
+    }
+
+    fn resolve(&mut self, pptr: PPtr) -> ObjectRef {
+        let qualified = self.qualifier.qualify(pptr);
+        let target = match qualified.path {
+            Some(path) => RefTarget::Path(path),
+            None if pptr.m_PathID == 0 => RefTarget::Null,
+            None => RefTarget::Loose {
+                name: qualified.name,
+                id: pptr.m_PathID,
+            },
+        };
+        ObjectRef {
+            file: qualified.file,
+            target,
+        }
+    }
+
+    /// An object value that is either bound to a variable (`use_var`) or a concrete pointer.
+    fn go_ref(&mut self, use_var: u8, name: &str, value: PPtr) -> GoRef {
+        if use_var != 0 {
+            GoRef::Var(name.to_owned())
+        } else {
+            GoRef::Object(self.resolve(value))
+        }
+    }
+
+    fn owner_ref(&mut self, owner: &FsmOwnerDefault) -> GoRef {
+        if owner.ownerOption == 0 {
+            GoRef::SelfOwner
+        } else {
+            self.go_ref(
+                owner.gameObject.useVariable,
+                &owner.gameObject.name,
+                owner.gameObject.value,
+            )
+        }
+    }
+
+    fn event_target(&mut self, t: &FsmEventTarget) -> EventTarget {
+        EventTarget {
+            kind: t.target,
+            game_object: self.owner_ref(&t.gameObject),
+            fsm_name: (!t.fsmName.value.is_empty()).then(|| t.fsmName.value.clone()),
+            fsm: self.resolve(PPtr::new(t.fsmComponent.m_FileID, t.fsmComponent.m_PathID)),
+        }
+    }
+
+    /// An `FsmVar` value: a variable reference, or a typed inline constant (objects resolved).
+    fn var_value(&mut self, v: &FsmVar) -> VarValue {
+        if !v.variableName.is_empty() {
+            return VarValue::Var(v.variableName.clone());
+        }
+        if v.useVariable != 0 {
+            return VarValue::Unset;
+        }
+        // VariableType: 0 Float 1 Int 2 Bool 3 GameObject 4 String 5-8/11 Vector 14 Enum, -1 unused.
+        match v.r#type {
+            -1 => VarValue::Unused,
+            0 => VarValue::Float(v.floatValue),
+            1 => VarValue::Int(v.intValue),
+            2 => VarValue::Bool(v.boolValue != 0),
+            4 => VarValue::Str(v.stringValue.clone()),
+            14 => VarValue::Enum(v.intValue),
+            3 | 9 | 10 | 12 => VarValue::Object(self.resolve(v.objectReference)),
+            5 | 6 | 7 | 8 | 11 => {
+                let w = &v.vector4Value;
+                VarValue::Vector(vec![w.x, w.y, w.z, w.w])
+            }
+            _ => VarValue::Inline,
+        }
+    }
+
+    fn array_value(&mut self, a: &FsmArray) -> ArrayValue {
+        if a.useVariable != 0 && !a.name.is_empty() {
+            return ArrayValue::Var(a.name.clone());
+        }
+        let objects = a
+            .objectReferences
+            .iter()
+            .map(|&p| self.resolve(p))
+            .collect();
+        let len = [
+            a.floatValues.len(),
+            a.intValues.len(),
+            a.boolValues.len(),
+            a.stringValues.len(),
+            a.vector4Values.len(),
+            a.objectReferences.len(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+        ArrayValue::Values { len, objects }
+    }
+
+    fn var_override(&mut self, o: &FsmVarOverride) -> VarOverride {
+        VarOverride {
+            variable: o.variable.name.clone(),
+            value: self.var_value(&o.fsmVar),
+        }
+    }
+
+    fn var_overrides(&mut self, v: &Option<Vec<FsmVarOverride>>) -> Vec<VarOverride> {
+        let Some(list) = v.as_deref() else {
+            return Vec::new();
+        };
+        list.iter().map(|o| self.var_override(o)).collect()
+    }
+
+    fn template_control<'b>(&mut self, t: &'b FsmTemplateControl) -> TemplateControl<'b> {
+        // the template pointer is stored under one of two field names across encodings
+        let template = t
+            .target
+            .as_ref()
+            .map(|p| p.m_PathID)
+            .or_else(|| t.fsmTemplate.as_ref().map(|p| p.m_PathID))
+            .unwrap_or_default();
+        TemplateControl {
+            template,
+            inputs: self.var_overrides(&t.inputVariables),
+            outputs: self.var_overrides(&t.outputVariables),
+            overrides: self.var_overrides(&t.fsmVarOverrides),
+            events: t
+                .outputEvents
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|e| (e.fromEvent.name.as_str(), e.toEvent.name.as_str()))
+                .collect(),
+        }
+    }
+}
+
+/// A resolved object pointer: the external file it lives in (if any) plus a stable address.
+#[derive(Debug, Clone, Hash)]
+pub struct ObjectRef {
+    pub file: Option<String>,
+    pub target: RefTarget,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub enum RefTarget {
+    /// In the scene hierarchy, addressable by a (version-stable) component path.
+    Path(ComponentPath),
+    /// A loose object (asset / component without a GameObject): no stable path, but its `m_Name`
+    /// when available, plus its path id.
+    Loose { name: Option<String>, id: PathId },
+    /// A null pointer.
+    Null,
+}
+
+/// An object-valued parameter (`FsmGameObject`/`FsmObject`/`FsmOwnerDefault`): a variable binding, a
+/// resolved object pointer, or — for owner params — the FSM's own GameObject.
+#[derive(Debug, Clone, Hash)]
+pub enum GoRef {
+    /// the FSM's own GameObject (`Owner (Self)`)
+    SelfOwner,
+    /// bound to a variable, by name
+    Var(String),
+    /// a concrete object, resolved
+    Object(ObjectRef),
+}
+
+/// A resolved event target (`FsmEventTarget`).
+#[derive(Debug, Clone, Hash)]
+pub struct EventTarget {
+    /// 0 Self, 1 GameObject, 2 GameObjectFSM, 3 FSMComponent, 4 BroadcastAll, 5 HostFSM, 6 SubFSMs
+    pub kind: i32,
+    pub game_object: GoRef,
+    /// target FSM name, if specified
+    pub fsm_name: Option<String>,
+    /// the targeted PlayMakerFSM component, resolved
+    pub fsm: ObjectRef,
+}
+
+/// A resolved Get/SetProperty target (`FsmProperty`): the object whose property is accessed.
+#[derive(Debug, Clone, Hash)]
+pub struct Property<'a> {
+    pub target: GoRef,
+    pub type_name: &'a str,
+    pub property: &'a str,
+}
+
+/// An `FsmString` value: a variable binding or a literal.
+#[derive(Debug, Clone)]
+pub enum StrValue {
+    Var(String),
+    Literal(String),
+}
+
+/// An `FsmVar` value: a variable reference or a typed inline constant.
+#[derive(Debug, Clone)]
+pub enum VarValue {
+    /// bound to a named variable
+    Var(String),
+    /// bound to a variable, unnamed
+    Unset,
+    Unused,
+    Float(f32),
+    Int(i32),
+    Bool(bool),
+    Str(String),
+    Object(ObjectRef),
+    Vector(Vec<f32>),
+    Enum(i32),
+    /// an inline constant of an unmodeled type
+    Inline,
+}
+
+/// An `FsmEnum` value.
+#[derive(Debug, Clone)]
+pub enum EnumValue {
+    Var(String),
+    Named { enum_name: String, value: i32 },
+    Value(i32),
+}
+
+/// An `FsmArray` value: a variable reference, or its element count plus any resolved object elements.
+#[derive(Debug, Clone)]
+pub enum ArrayValue {
+    Var(String),
+    Values { len: usize, objects: Vec<ObjectRef> },
+}
+
+/// A reflective method/property call (`FunctionCall`). Parameter values are not modeled.
+#[derive(Debug, Clone)]
+pub struct Call<'a> {
+    pub function: &'a str,
+    pub parameter_type: &'a str,
+}
+
+/// An animation curve (`FsmAnimationCurve`).
+#[derive(Debug, Clone)]
+pub struct Curve {
+    pub keys: Vec<CurveKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CurveKey {
+    pub time: f32,
+    pub value: f32,
+    pub in_slope: f32,
+    pub out_slope: f32,
+}
+
+/// A template variable binding (`FsmVarOverride`): a template variable and the value bound to it.
+#[derive(Debug, Clone)]
+pub struct VarOverride {
+    pub variable: String,
+    pub value: VarValue,
+}
 
 /// Structured view of a whole FSM.
 pub struct FsmModel<'a> {
@@ -65,21 +334,21 @@ pub enum ParamValue<'a> {
 
     /// A raw `String` param: borrowed from `stringParams` (typed form) or owned (byteData form).
     Str(Cow<'a, str>),
-    FsmString(&'a FsmString),
-    Owner(&'a FsmOwnerDefault),
-    Var(&'a FsmVar),
-    GameObject(&'a FsmGameObject),
-    Object(&'a FsmObject),
-    EventTarget(&'a FsmEventTarget),
-    Function(&'a FunctionCall),
+    FsmString(StrValue),
+    Owner(GoRef),
+    Var(VarValue),
+    GameObject(GoRef),
+    Object(GoRef),
+    EventTarget(EventTarget),
+    Function(Call<'a>),
     Template(TemplateControl<'a>),
-    Enum(&'a FsmEnum),
-    Array(&'a FsmArray),
-    Property(&'a FsmProperty),
-    AnimCurve(&'a FsmAnimationCurve),
+    Enum(EnumValue),
+    Array(ArrayValue),
+    Property(Property<'a>),
+    AnimCurve(Curve),
     ArraySize(i32),
-    /// Unity object reference (`ObjectReference`/`GameObject`).
-    Pptr(&'a PPtr),
+    /// Unity object reference (`ObjectReference`/`GameObject`), resolved to a stable address.
+    Pptr(ObjectRef),
 
     /// Couldn't decode (unknown type / index out of range / truncated).
     Raw(&'a [u8]),
@@ -96,14 +365,17 @@ pub struct Variable<'a> {
 /// ([`overrides`](Self::overrides)); the unused lists are empty.
 pub struct TemplateControl<'a> {
     pub template: PathId,
-    pub inputs: Vec<&'a FsmVarOverride>,
-    pub outputs: Vec<&'a FsmVarOverride>,
-    pub overrides: Vec<&'a FsmVarOverride>,
+    pub inputs: Vec<VarOverride>,
+    pub outputs: Vec<VarOverride>,
+    pub overrides: Vec<VarOverride>,
     pub events: Vec<(&'a str, &'a str)>,
 }
 
-/// Resolve a [`Fsm`] into the structured [`FsmModel`].
-pub fn decode_fsm(fsm: &Fsm) -> FsmModel<'_> {
+/// Resolve a [`Fsm`] into the structured [`FsmModel`], resolving object pointers via `ctx`.
+pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
+    fsm: &'a Fsm,
+    ctx: &mut Context<'_, R, P>,
+) -> FsmModel<'a> {
     FsmModel {
         name: &fsm.name,
         start_state: &fsm.startState,
@@ -112,7 +384,7 @@ pub fn decode_fsm(fsm: &Fsm) -> FsmModel<'_> {
         states: fsm
             .states
             .iter()
-            .map(|s| decode_state(s, &fsm.startState))
+            .map(|s| decode_state(s, &fsm.startState, &mut *ctx))
             .collect(),
         variables: decode_variables(&fsm.variables),
     }
@@ -125,7 +397,11 @@ fn transition(t: &FsmTransition) -> Transition<'_> {
     }
 }
 
-fn decode_state<'a>(s: &'a FsmState, start: &str) -> State<'a> {
+fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
+    s: &'a FsmState,
+    start: &str,
+    ctx: &mut Context<'_, R, P>,
+) -> State<'a> {
     let ad = &s.actionData;
     let actions = ad
         .actionNames
@@ -139,7 +415,7 @@ fn decode_state<'a>(s: &'a FsmState, start: &str) -> State<'a> {
                 .filter(|c| !c.is_empty())
                 .map(String::as_str),
             enabled: ad.actionEnabled.get(ai) != Some(&0),
-            params: decode_params(ad, ai),
+            params: decode_params(ad, ai, &mut *ctx),
         })
         .collect();
     State {
@@ -151,7 +427,11 @@ fn decode_state<'a>(s: &'a FsmState, start: &str) -> State<'a> {
 }
 
 /// Decode action `ai`'s parameter slice into typed [`Param`]s.
-fn decode_params(ad: &ActionData, ai: usize) -> Vec<Param<'_>> {
+fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
+    ad: &'a ActionData,
+    ai: usize,
+    ctx: &mut Context<'_, R, P>,
+) -> Vec<Param<'a>> {
     let starts = &ad.actionStartIndex;
     let Some(&lo) = starts.get(ai) else {
         return vec![];
@@ -172,21 +452,25 @@ fn decode_params(ad: &ActionData, ai: usize) -> Vec<Param<'_>> {
             Some(Param {
                 name,
                 type_name,
-                value: decode_param(ad, type_name, pos, size),
+                value: decode_param(ad, type_name, pos, size, &mut *ctx),
             })
         })
         .collect()
 }
 
-fn decode_param<'a>(
+fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
     ad: &'a ActionData,
     type_name: &str,
     pos: usize,
     size: usize,
+    ctx: &mut Context<'_, R, P>,
 ) -> ParamValue<'a> {
     let bd = &ad.byteData;
     let decoded = match type_name {
-        "FsmString" => ad.fsmStringParams.get(pos).map(ParamValue::FsmString),
+        "FsmString" => ad
+            .fsmStringParams
+            .get(pos)
+            .map(|s| ParamValue::FsmString(str_value(s))),
         // raw String has the same dual encoding: the bytes inline (size > 0) or `stringParams[pos]`.
         "String" if size > 0 => Some(ParamValue::Str(
             String::from_utf8_lossy(byte_slice(bd, pos, size))
@@ -201,27 +485,45 @@ fn decode_param<'a>(
         "Vector2" => raw_floats(bd, pos, 2),
         "Vector3" => raw_floats(bd, pos, 3),
         "Vector4" | "Color" | "Rect" | "Quaternion" => raw_floats(bd, pos, 4),
-        "FsmOwnerDefault" => ad.fsmOwnerDefaultParams.get(pos).map(ParamValue::Owner),
-        "FsmVar" => ad.fsmVarParams.get(pos).map(ParamValue::Var),
-        "FsmGameObject" => ad.fsmGameObjectParams.get(pos).map(ParamValue::GameObject),
-        "FsmObject" | "FsmMaterial" | "FsmTexture" => {
-            ad.fsmObjectParams.get(pos).map(ParamValue::Object)
-        }
+        "FsmOwnerDefault" => ad
+            .fsmOwnerDefaultParams
+            .get(pos)
+            .map(|o| ParamValue::Owner(ctx.owner_ref(o))),
+        "FsmVar" => ad
+            .fsmVarParams
+            .get(pos)
+            .map(|fv| ParamValue::Var(ctx.var_value(fv))),
+        "FsmGameObject" => ad
+            .fsmGameObjectParams
+            .get(pos)
+            .map(|g| ParamValue::GameObject(ctx.go_ref(g.useVariable, &g.name, g.value))),
+        "FsmObject" | "FsmMaterial" | "FsmTexture" => ad
+            .fsmObjectParams
+            .get(pos)
+            .map(|o| ParamValue::Object(ctx.go_ref(o.useVariable, &o.name, o.value))),
         "FsmEventTarget" => ad
             .fsmEventTargetParams
             .get(pos)
-            .map(ParamValue::EventTarget),
-        "FunctionCall" => ad.functionCallParams.get(pos).map(ParamValue::Function),
+            .map(|t| ParamValue::EventTarget(ctx.event_target(t))),
+        "FunctionCall" => ad.functionCallParams.get(pos).map(|f| {
+            ParamValue::Function(Call {
+                function: &f.FunctionName,
+                parameter_type: &f.parameterType,
+            })
+        }),
         "FsmTemplateControl" => ad
             .fsmTemplateControlParams
             .get(pos)
-            .map(|t| ParamValue::Template(template_control(t))),
+            .map(|t| ParamValue::Template(ctx.template_control(t))),
         "Array" => ad
             .arrayParamSizes
             .get(pos)
             .copied()
             .map(ParamValue::ArraySize),
-        "ObjectReference" | "GameObject" => ad.unityObjectParams.get(pos).map(ParamValue::Pptr),
+        "ObjectReference" | "GameObject" => ad
+            .unityObjectParams
+            .get(pos)
+            .map(|p| ParamValue::Pptr(ctx.resolve(*p))),
         "Boolean" => Some(ParamValue::Bool(bd.get(pos).copied().unwrap_or(0) != 0)),
         "Integer" | "Enum" | "LayerMask" => read_i32(bd, pos).map(ParamValue::Int),
         "Float" => read_f32(bd, pos).map(ParamValue::Float),
@@ -282,10 +584,29 @@ fn decode_param<'a>(
             )
         }),
         // these always use the typed param array (no byteData form).
-        "FsmEnum" => ad.fsmEnumParams.get(pos).map(ParamValue::Enum),
-        "FsmArray" => ad.fsmArrayParams.get(pos).map(ParamValue::Array),
-        "FsmProperty" => ad.fsmPropertyParams.get(pos).map(ParamValue::Property),
-        "FsmAnimationCurve" => ad.animationCurveParams.get(pos).map(ParamValue::AnimCurve),
+        "FsmEnum" => ad
+            .fsmEnumParams
+            .get(pos)
+            .map(|e| ParamValue::Enum(enum_value(e))),
+        "FsmArray" => ad
+            .fsmArrayParams
+            .get(pos)
+            .map(|a| ParamValue::Array(ctx.array_value(a))),
+        "FsmProperty" => ad.fsmPropertyParams.get(pos).map(|p| {
+            ParamValue::Property(Property {
+                target: ctx.go_ref(
+                    p.TargetObject.useVariable,
+                    &p.TargetObject.name,
+                    p.TargetObject.value,
+                ),
+                type_name: &p.TargetTypeName,
+                property: &p.PropertyName,
+            })
+        }),
+        "FsmAnimationCurve" => ad
+            .animationCurveParams
+            .get(pos)
+            .map(|c| ParamValue::AnimCurve(curve(c))),
         "FsmEvent" => Some(ParamValue::Event(if size == 0 {
             None
         } else {
@@ -307,29 +628,40 @@ fn wrap<'a>(use_var: u8, name: &str, value: ParamValue<'a>) -> ParamValue<'a> {
     }
 }
 
-fn var_overrides(v: &Option<Vec<FsmVarOverride>>) -> Vec<&FsmVarOverride> {
-    v.as_deref().unwrap_or_default().iter().collect()
+/// An `FsmString`: a variable binding or a literal.
+fn str_value(s: &FsmString) -> StrValue {
+    if s.useVariable != 0 && !s.name.is_empty() {
+        StrValue::Var(s.name.clone())
+    } else {
+        StrValue::Literal(s.value.clone())
+    }
 }
 
-fn template_control(t: &FsmTemplateControl) -> TemplateControl<'_> {
-    // the template pointer is stored under one of two field names across encodings
-    let template = t
-        .target
-        .as_ref()
-        .map(|p| p.m_PathID)
-        .or_else(|| t.fsmTemplate.as_ref().map(|p| p.m_PathID))
-        .unwrap_or_default();
-    TemplateControl {
-        template,
-        inputs: var_overrides(&t.inputVariables),
-        outputs: var_overrides(&t.outputVariables),
-        overrides: var_overrides(&t.fsmVarOverrides),
-        events: t
-            .outputEvents
-            .as_deref()
-            .unwrap_or_default()
+fn enum_value(e: &FsmEnum) -> EnumValue {
+    if e.useVariable != 0 && !e.name.is_empty() {
+        EnumValue::Var(e.name.clone())
+    } else if !e.enumName.is_empty() {
+        EnumValue::Named {
+            enum_name: e.enumName.clone(),
+            value: e.intValue,
+        }
+    } else {
+        EnumValue::Value(e.intValue)
+    }
+}
+
+fn curve(c: &FsmAnimationCurve) -> Curve {
+    Curve {
+        keys: c
+            .curve
+            .m_Curve
             .iter()
-            .map(|e| (e.fromEvent.name.as_str(), e.toEvent.name.as_str()))
+            .map(|k| CurveKey {
+                time: k.time,
+                value: k.value,
+                in_slope: k.inSlope,
+                out_slope: k.outSlope,
+            })
             .collect(),
     }
 }

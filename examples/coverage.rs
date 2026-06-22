@@ -6,7 +6,7 @@
 //! indices) and any `ParamDataType` ordinal not in `PARAM_TYPES`.
 
 use anyhow::Result;
-use playmakerfsm::model::{ParamValue, decode_fsm, ptype};
+use playmakerfsm::model::{Context, ParamValue, decode_fsm, ptype};
 use playmakerfsm::raw::*;
 use rabex::objects::pptr::PathId;
 use serde::Deserialize;
@@ -59,6 +59,7 @@ fn main() -> Result<()> {
             }
         };
         bundles_ok += 1;
+        let mut ctx = Context::new(&handle);
         for &id in ids {
             let fsm = match handle.object_at::<PlayMakerFSM>(id).and_then(|o| o.read()) {
                 Ok(f) => f,
@@ -69,7 +70,7 @@ fn main() -> Result<()> {
             };
             fsms_ok += 1;
 
-            let model = decode_fsm(&fsm.fsm);
+            let model = decode_fsm(&fsm.fsm, &mut ctx);
             for state in &model.states {
                 for action in &state.actions {
                     for p in &action.params {

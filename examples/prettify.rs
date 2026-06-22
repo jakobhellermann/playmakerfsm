@@ -5,11 +5,12 @@ use std::sync::LazyLock;
 
 use anyhow::Result;
 use playmakerfsm::model::{
-    Action, FsmModel, ParamValue, State, TemplateControl, Transition, decode_fsm, longest_ascii_run,
+    Action, ArrayValue, Call, Context, EnumValue, EventTarget, FsmModel, GoRef, ObjectRef,
+    ParamValue, Property, RefTarget, State, StrValue, TemplateControl, Transition, VarOverride,
+    VarValue, decode_fsm, longest_ascii_run,
 };
 use playmakerfsm::raw::*;
 use rabex::objects::pptr::PathId;
-use rabex_env::rabex::objects::PPtr;
 
 mod utils;
 
@@ -21,7 +22,8 @@ fn main() -> Result<()> {
 
     let file = env.load_addressables_bundle_content(bundle)?;
     let fsm = file.object_at::<PlayMakerFSM>(path_id)?.read()?;
-    let fsm = decode_fsm(&fsm.fsm);
+    let mut ctx = Context::new(&file);
+    let fsm = decode_fsm(&fsm.fsm, &mut ctx);
 
     print!("{}", prettify_model(&fsm));
     Ok(())
@@ -146,19 +148,19 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
         ParamValue::Event(None) => "(none)".into(),
         ParamValue::Str(s) => format!("{s:?}"),
         ParamValue::FsmString(s) => fmt_string(s),
-        ParamValue::Owner(ow) => fmt_owner(ow),
-        ParamValue::Var(fv) => fmt_var(fv),
-        ParamValue::GameObject(g) => fmt_go(g.useVariable, &g.name, &g.value),
-        ParamValue::Object(g) => fmt_go(g.useVariable, &g.name, &g.value),
+        ParamValue::Owner(r) => fmt_go_ref(r),
+        ParamValue::Var(v) => fmt_var(v),
+        ParamValue::GameObject(r) => fmt_go_ref(r),
+        ParamValue::Object(r) => fmt_go_ref(r),
         ParamValue::EventTarget(t) => fmt_event_target(t),
         ParamValue::Function(f) => fmt_function(f),
         ParamValue::Template(t) => fmt_template(t),
         ParamValue::Enum(e) => fmt_enum(e),
         ParamValue::Array(a) => fmt_array(a),
         ParamValue::Property(p) => fmt_property(p),
-        ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.curve.m_Curve.len()),
+        ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.keys.len()),
         ParamValue::ArraySize(n) => format!("[{n} elems]"),
-        ParamValue::Pptr(p) => fmt_pptr(p),
+        ParamValue::Pptr(r) => fmt_object_ref(r),
         ParamValue::Raw(bytes) => match longest_ascii_run(bytes) {
             Some(s) => format!("→{s:?}"),
             None => format!("({type_name}, {}B)", bytes.len()),
@@ -166,64 +168,51 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
     }
 }
 
-fn fmt_string(s: &FsmString) -> String {
-    if s.useVariable != 0 && !s.name.is_empty() {
-        format!("var {:?}", s.name)
-    } else {
-        format!("{:?}", s.value)
+fn fmt_string(s: &StrValue) -> String {
+    match s {
+        StrValue::Var(name) => format!("var {name:?}"),
+        StrValue::Literal(value) => format!("{value:?}"),
     }
 }
-fn fmt_go(use_var: u8, name: &str, pptr: &PPtr) -> String {
-    if use_var != 0 && !name.is_empty() {
-        format!("var {name:?}")
-    } else {
-        fmt_pptr(pptr)
+fn fmt_go_ref(r: &GoRef) -> String {
+    match r {
+        GoRef::SelfOwner => "Owner (Self)".into(),
+        GoRef::Var(name) => format!("var {name:?}"),
+        GoRef::Object(o) => fmt_object_ref(o),
     }
 }
-fn fmt_pptr(p: &PPtr) -> String {
-    if p.is_null() {
-        "<null>".into()
-    } else {
-        format!("PPtr({})", p.m_PathID)
+fn fmt_object_ref(r: &ObjectRef) -> String {
+    let loc = match &r.target {
+        RefTarget::Path(p) => p.to_string(),
+        RefTarget::Loose { name: Some(n), .. } => n.clone(),
+        RefTarget::Loose { name: None, id } => format!("loose:{id}"),
+        RefTarget::Null => return "<null>".into(),
+    };
+    match &r.file {
+        Some(file) => format!("{loc} ({file})"),
+        None => loc,
     }
 }
-fn fmt_owner(o: &FsmOwnerDefault) -> String {
-    if o.ownerOption == 0 {
-        "Owner (Self)".into()
-    } else {
-        fmt_go(
-            o.gameObject.useVariable,
-            &o.gameObject.name,
-            &o.gameObject.value,
-        )
-    }
-}
-fn fmt_var(v: &FsmVar) -> String {
-    if !v.variableName.is_empty() {
-        return format!("var {:?}", v.variableName);
-    }
-    // a variable slot (e.g. a storeResult) left unbound — not an inline constant of 0/"".
-    if v.useVariable != 0 {
-        return "(unset var)".into();
-    }
-    // inline constant — VariableType: 0 Float 1 Int 2 Bool 3 GameObject 4 String … 14 Enum, -1 unused.
-    match v.r#type {
-        -1 => "(unused)".into(),
-        0 => format!("{}", v.floatValue),
-        1 => v.intValue.to_string(),
-        2 => (v.boolValue != 0).to_string(),
-        4 => format!("{:?}", v.stringValue),
-        14 => format!("enum({})", v.intValue),
-        3 | 9 | 10 | 12 => fmt_pptr(&v.objectReference),
-        5 | 6 | 7 | 8 | 11 => {
-            let w = &v.vector4Value;
-            format!("({},{},{},{})", w.x, w.y, w.z, w.w)
+fn fmt_var(v: &VarValue) -> String {
+    match v {
+        VarValue::Var(name) => format!("var {name:?}"),
+        VarValue::Unset => "(unset var)".into(),
+        VarValue::Unused => "(unused)".into(),
+        VarValue::Float(f) => format!("{f}"),
+        VarValue::Int(i) => i.to_string(),
+        VarValue::Bool(b) => b.to_string(),
+        VarValue::Str(s) => format!("{s:?}"),
+        VarValue::Object(o) => fmt_object_ref(o),
+        VarValue::Vector(comps) => {
+            let parts: Vec<_> = comps.iter().map(|f| f.to_string()).collect();
+            format!("({})", parts.join(","))
         }
-        _ => "<inline>".into(),
+        VarValue::Enum(i) => format!("enum({i})"),
+        VarValue::Inline => "<inline>".into(),
     }
 }
-fn fmt_event_target(t: &FsmEventTarget) -> String {
-    let kind = match t.target {
+fn fmt_event_target(t: &EventTarget) -> String {
+    let kind = match t.kind {
         0 => "Self",
         1 => "GameObject",
         2 => "GameObjectFSM",
@@ -234,17 +223,11 @@ fn fmt_event_target(t: &FsmEventTarget) -> String {
         _ => "?",
     };
     let mut bits = Vec::new();
-    if t.target == 1 || t.target == 2 {
-        bits.push(if t.gameObject.ownerOption == 0 {
-            "Owner".to_string()
-        } else if !t.gameObject.gameObject.name.is_empty() {
-            format!("var {:?}", t.gameObject.gameObject.name)
-        } else {
-            "<unset>".to_string()
-        });
+    if t.kind == 1 || t.kind == 2 {
+        bits.push(fmt_go_ref(&t.game_object));
     }
-    if !t.fsmName.value.is_empty() {
-        bits.push(format!("fsm={:?}", t.fsmName.value));
+    if let Some(name) = &t.fsm_name {
+        bits.push(format!("fsm={name:?}"));
     }
     if bits.is_empty() {
         kind.to_string()
@@ -252,25 +235,22 @@ fn fmt_event_target(t: &FsmEventTarget) -> String {
         format!("{}({})", kind, bits.join(", "))
     }
 }
-fn fmt_function(f: &FunctionCall) -> String {
-    if f.parameterType.is_empty() || f.parameterType == "None" {
-        format!("{}()", f.FunctionName)
+fn fmt_function(f: &Call) -> String {
+    if f.parameter_type.is_empty() || f.parameter_type == "None" {
+        format!("{}()", f.function)
     } else {
-        format!("{}(<{}>)", f.FunctionName, f.parameterType)
+        format!("{}(<{}>)", f.function, f.parameter_type)
     }
 }
 fn fmt_template(t: &TemplateControl) -> String {
     // each override binds a template variable to a parent-FSM variable; `arrow` shows the data flow
     // (inputs: parent -> template, rendered `templateVar <- parentVar`; outputs: template -> parent, `->`).
-    let vmap = |entries: &[&FsmVarOverride], arrow: &str| -> Vec<String> {
+    let vmap = |entries: &[VarOverride], arrow: &str| -> Vec<String> {
         entries
             .iter()
-            .map(|e| {
-                if !e.fsmVar.variableName.is_empty() {
-                    format!("{}{arrow}var {:?}", e.variable.name, e.fsmVar.variableName)
-                } else {
-                    e.variable.name.clone()
-                }
+            .map(|o| match &o.value {
+                VarValue::Var(name) => format!("{}{arrow}var {name:?}", o.variable),
+                _ => o.variable.clone(),
             })
             .collect()
     };
@@ -294,33 +274,25 @@ fn fmt_template(t: &TemplateControl) -> String {
     }
     parts.join(" ")
 }
-fn fmt_enum(e: &FsmEnum) -> String {
-    if e.useVariable != 0 && !e.name.is_empty() {
-        format!("var {:?}", e.name)
-    } else if !e.enumName.is_empty() {
-        format!("{}({})", short(&e.enumName), e.intValue)
-    } else {
-        e.intValue.to_string()
+fn fmt_enum(e: &EnumValue) -> String {
+    match e {
+        EnumValue::Var(name) => format!("var {name:?}"),
+        EnumValue::Named { enum_name, value } => format!("{}({value})", short(enum_name)),
+        EnumValue::Value(value) => value.to_string(),
     }
 }
-fn fmt_array(a: &FsmArray) -> String {
-    if a.useVariable != 0 && !a.name.is_empty() {
-        return format!("var {:?}", a.name);
+fn fmt_array(a: &ArrayValue) -> String {
+    match a {
+        ArrayValue::Var(name) => format!("var {name:?}"),
+        ArrayValue::Values { len, .. } => format!("array[{len} elems]"),
     }
-    let n = a.floatValues.len()
-        + a.intValues.len()
-        + a.boolValues.len()
-        + a.stringValues.len()
-        + a.vector4Values.len()
-        + a.objectReferences.len();
-    format!("array[{n} elems]")
 }
-fn fmt_property(p: &FsmProperty) -> String {
-    let ty = short(&p.TargetTypeName);
-    if p.PropertyName.is_empty() {
+fn fmt_property(p: &Property) -> String {
+    let ty = short(p.type_name);
+    if p.property.is_empty() {
         ty.to_string()
     } else {
-        format!("{}.{}", ty, p.PropertyName)
+        format!("{}.{}", ty, p.property)
     }
 }
 
