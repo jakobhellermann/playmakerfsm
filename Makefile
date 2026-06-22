@@ -9,4 +9,13 @@ out/fsms_hk.json:
 
 out/fsms_hkss.json:
 	@mkdir -p out
-	rabex --steam-game 'Silksong' file globalgamemanagers.assets object PlayMakerFSM references --format json > out/fsms_hkss.json
+	rabex --steam-game silk bundle 94696d22b6ed0a74097d1bd58feb4dce_monoscripts.bundle file object PlayMakerFSM references --format json > out/fsms_hkss.json
+
+.PHONY: content content-hk content-ss
+content: content-hk content-ss
+
+content-hk: out/fsms_hk.json
+	cargo run --release -q --example content_index -- hk
+
+content-ss: out/fsms_hkss.json
+	cargo run --release -q --example content_index -- silksong

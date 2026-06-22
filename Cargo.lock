@@ -453,6 +453,7 @@ dependencies = [
  "anyhow",
  "rabex",
  "rabex-env",
+ "rayon",
  "serde",
  "serde-value",
  "serde_json",
