@@ -9,10 +9,10 @@ use anyhow::Result;
 use playmakerfsm::model::{ParamValue, decode_fsm, ptype};
 use playmakerfsm::raw::*;
 use rabex::objects::pptr::PathId;
-use rabex::{tpk::TpkTypeTreeBlob, typetree::typetree_cache::sync::TypeTreeCache};
-use rabex_env::Environment;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+
+mod utils;
 
 #[derive(Deserialize)]
 struct Index {
@@ -31,9 +31,7 @@ struct Stat {
 }
 
 fn main() -> Result<()> {
-    let path = "/home/jakob/.steamapps/Hollow Knight Silksong";
-    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
-    let env = Environment::new_in(path, tpk)?;
+    let env = utils::find_game("silksong")?.unwrap();
 
     let index: Index = serde_json::from_str(&std::fs::read_to_string("fsms.json")?)?;
 

@@ -1,14 +1,12 @@
 use anyhow::Result;
 use playmakerfsm::raw::PlayMakerFSM;
-use rabex::{
-    objects::pptr::PathId, tpk::TpkTypeTreeBlob, typetree::typetree_cache::sync::TypeTreeCache,
-};
-use rabex_env::{Environment, scene_lookup::SceneLookup};
+use rabex::objects::pptr::PathId;
+use rabex_env::scene_lookup::SceneLookup;
+
+mod utils;
 
 fn main() -> Result<()> {
-    let path = "/home/jakob/.steamapps/Hollow Knight Silksong";
-    let tpk = TypeTreeCache::new(TpkTypeTreeBlob::embedded());
-    let env = Environment::new_in(path, tpk)?;
+    let env = utils::find_game("silksong")?.unwrap();
 
     let bundle = "scenes_scenes_scenes/tut_04.bundle";
     let path_id: PathId = 4720;
