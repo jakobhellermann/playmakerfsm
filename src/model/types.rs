@@ -13,6 +13,7 @@ pub struct ObjectRef {
 }
 
 #[derive(Debug, Clone, Hash, serde::Serialize)]
+#[serde(tag = "kind", content = "target")]
 pub enum RefTarget {
     /// In the scene hierarchy, addressable by a (version-stable) component path.
     Path(ComponentPath),
@@ -45,6 +46,8 @@ pub struct EventTarget {
     pub fsm_name: Option<String>,
     /// the targeted PlayMakerFSM component, resolved
     pub fsm: ObjectRef,
+    pub exclude_self: bool,
+    pub send_to_children: bool,
 }
 
 /// A resolved Get/SetProperty target (`FsmProperty`): the object whose property is accessed.
@@ -53,10 +56,13 @@ pub struct Property<'a> {
     pub target: GoRef,
     pub type_name: &'a str,
     pub property: &'a str,
+    /// `true` for SetProperty, `false` for GetProperty
+    pub set: bool,
 }
 
 /// An `FsmString` value: a variable binding or a literal.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "value")]
 pub enum StrValue {
     Var(String),
     Literal(String),
@@ -64,6 +70,7 @@ pub enum StrValue {
 
 /// An `FsmVar` value: a variable reference or a typed inline constant.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", content = "value")]
 pub enum VarValue {
     /// bound to a named variable
     Var(String),
@@ -77,36 +84,57 @@ pub enum VarValue {
     Object(ObjectRef),
     Vector(Vec<f32>),
     Enum(i32),
-    /// an inline constant of an unmodeled type
-    Inline,
+    Array(ArrayValue),
 }
 
 /// An `FsmEnum` value.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "value")]
 pub enum EnumValue {
     Var(String),
     Named { enum_name: String, value: i32 },
     Value(i32),
 }
 
-/// An `FsmArray` value: a variable reference, or its element count plus any resolved object elements.
+/// An `FsmArray` value: a variable reference, or its elements.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "value")]
 pub enum ArrayValue {
     Var(String),
-    Values { len: usize, objects: Vec<ObjectRef> },
+    Values(Vec<Value>),
 }
 
-/// A reflective method/property call (`FunctionCall`). Parameter values are not modeled.
+/// Any Fsm-wrapped parameter value: a variable binding or a typed literal (objects resolved).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", content = "value")]
+pub enum Value {
+    Var(String),
+    Bool(bool),
+    Int(i32),
+    Float(f32),
+    Str(String),
+    Vector(Vec<f32>),
+    Enum { enum_name: String, value: i32 },
+    Object(ObjectRef),
+    Array(ArrayValue),
+}
+
+/// A reflective method/property call (`FunctionCall`): the called member, its parameter type, and
+/// the value of the active parameter (selected by `parameter_type`).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Call<'a> {
     pub function: &'a str,
     pub parameter_type: &'a str,
+    pub value: Option<Value>,
 }
 
 /// An animation curve (`FsmAnimationCurve`).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Curve {
     pub keys: Vec<CurveKey>,
+    pub pre_infinity: i32,
+    pub post_infinity: i32,
+    pub rotation_order: i32,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -115,6 +143,9 @@ pub struct CurveKey {
     pub value: f32,
     pub in_slope: f32,
     pub out_slope: f32,
+    pub in_weight: f32,
+    pub out_weight: f32,
+    pub weighted_mode: i32,
 }
 
 /// A template variable binding (`FsmVarOverride`): a template variable and the value bound to it.
@@ -129,10 +160,18 @@ pub struct VarOverride {
 pub struct FsmModel<'a> {
     pub name: &'a str,
     pub start_state: &'a str,
-    pub event_count: usize,
+    pub events: Vec<Event<'a>>,
     pub global_transitions: Vec<Transition<'a>>,
     pub states: Vec<State<'a>>,
     pub variables: Vec<Variable<'a>>,
+}
+
+/// A declared FSM event.
+#[derive(serde::Serialize)]
+pub struct Event<'a> {
+    pub name: &'a str,
+    pub is_global: bool,
+    pub is_system: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -170,6 +209,7 @@ pub struct Param<'a> {
 
 /// A decoded parameter value.
 #[derive(serde::Serialize)]
+#[serde(tag = "type", content = "value")]
 pub enum ParamValue<'a> {
     Bool(bool),
     Int(i32),
@@ -195,7 +235,8 @@ pub enum ParamValue<'a> {
     Array(ArrayValue),
     Property(Property<'a>),
     AnimCurve(Curve),
-    ArraySize(i32),
+    /// An inline `Array` param: its element params, nested.
+    List(Vec<Param<'a>>),
     /// Unity object reference (`ObjectReference`/`GameObject`), resolved to a stable address.
     Pptr(ObjectRef),
 

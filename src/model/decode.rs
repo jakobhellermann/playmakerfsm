@@ -71,6 +71,8 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
             game_object: self.owner_ref(&t.gameObject),
             fsm_name: (!t.fsmName.value.is_empty()).then(|| t.fsmName.value.clone()),
             fsm: self.resolve(PPtr::new(t.fsmComponent.m_FileID, t.fsmComponent.m_PathID)),
+            exclude_self: t.excludeSelf.value != 0,
+            send_to_children: t.sendToChildren.value != 0,
         }
     }
 
@@ -89,13 +91,14 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
             1 => VarValue::Int(v.intValue),
             2 => VarValue::Bool(v.boolValue != 0),
             4 => VarValue::Str(v.stringValue.clone()),
+            13 => VarValue::Array(self.array_value(&v.arrayValue)),
             14 => VarValue::Enum(v.intValue),
             3 | 9 | 10 | 12 => VarValue::Object(self.resolve(v.objectReference)),
             5 | 6 | 7 | 8 | 11 => {
                 let w = &v.vector4Value;
                 VarValue::Vector(vec![w.x, w.y, w.z, w.w])
             }
-            _ => VarValue::Inline,
+            t => unreachable!("unknown VariableType ordinal: {t}"),
         }
     }
 
@@ -103,23 +106,29 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
         if a.useVariable != 0 && !a.name.is_empty() {
             return ArrayValue::Var(a.name.clone());
         }
-        let objects = a
-            .objectReferences
-            .iter()
-            .map(|&p| self.resolve(p))
-            .collect();
-        let len = [
-            a.floatValues.len(),
-            a.intValues.len(),
-            a.boolValues.len(),
-            a.stringValues.len(),
-            a.vector4Values.len(),
-            a.objectReferences.len(),
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or(0);
-        ArrayValue::Values { len, objects }
+        // a PlayMaker array is homogeneous; its element type selects which value vec is populated
+        let values = match a.r#type {
+            0 => a.floatValues.iter().map(|&f| Value::Float(f)).collect(),
+            1 => a.intValues.iter().map(|&i| Value::Int(i)).collect(),
+            2 => a.boolValues.iter().map(|&b| Value::Bool(b != 0)).collect(),
+            4 => a
+                .stringValues
+                .iter()
+                .map(|s| Value::Str(s.clone()))
+                .collect(),
+            3 | 9 | 10 | 12 => a
+                .objectReferences
+                .iter()
+                .map(|&p| Value::Object(self.resolve(p)))
+                .collect(),
+            5 | 6 | 7 | 8 | 11 => a
+                .vector4Values
+                .iter()
+                .map(|v| Value::Vector(vec![v.x, v.y, v.z, v.w]))
+                .collect(),
+            _ => Vec::new(),
+        };
+        ArrayValue::Values(values)
     }
 
     fn var_override(&mut self, o: &FsmVarOverride) -> VarOverride {
@@ -158,6 +167,137 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
                 .collect(),
         }
     }
+
+    fn value_object(&mut self, use_var: u8, name: &str, value: PPtr) -> Value {
+        if use_var != 0 {
+            Value::Var(name.to_owned())
+        } else {
+            Value::Object(self.resolve(value))
+        }
+    }
+
+    /// The value of a [`FunctionCall`]'s active parameter, selected by its `parameterType`.
+    fn fn_param(&mut self, f: &FunctionCall) -> Option<Value> {
+        Some(match f.parameterType.as_str() {
+            "Bool" => value_bool(&f.BoolParameter),
+            "Int" => value_int(&f.IntParameter),
+            "Float" => value_float(&f.FloatParameter),
+            "String" => value_string(&f.StringParameter),
+            "Vector2" => value_vec(
+                f.Vector2Parameter.useVariable,
+                &f.Vector2Parameter.name,
+                vec![f.Vector2Parameter.value.x, f.Vector2Parameter.value.y],
+            ),
+            "Vector3" => value_vec(
+                f.Vector3Parameter.useVariable,
+                &f.Vector3Parameter.name,
+                vec![
+                    f.Vector3Parameter.value.x,
+                    f.Vector3Parameter.value.y,
+                    f.Vector3Parameter.value.z,
+                ],
+            ),
+            "Quaternion" => value_vec(
+                f.QuaternionParameter.useVariable,
+                &f.QuaternionParameter.name,
+                vec![
+                    f.QuaternionParameter.value.x,
+                    f.QuaternionParameter.value.y,
+                    f.QuaternionParameter.value.z,
+                    f.QuaternionParameter.value.w,
+                ],
+            ),
+            "Color" => value_vec(
+                f.ColorParameter.useVariable,
+                &f.ColorParameter.name,
+                vec![
+                    f.ColorParameter.value.r,
+                    f.ColorParameter.value.g,
+                    f.ColorParameter.value.b,
+                    f.ColorParameter.value.a,
+                ],
+            ),
+            "Rect" => value_vec(
+                f.RectParamater.useVariable,
+                &f.RectParamater.name,
+                vec![
+                    f.RectParamater.value.x,
+                    f.RectParamater.value.y,
+                    f.RectParamater.value.width,
+                    f.RectParamater.value.height,
+                ],
+            ),
+            "GameObject" => self.value_object(
+                f.GameObjectParameter.useVariable,
+                &f.GameObjectParameter.name,
+                f.GameObjectParameter.value,
+            ),
+            "Object" => self.value_object(
+                f.ObjectParameter.useVariable,
+                &f.ObjectParameter.name,
+                f.ObjectParameter.value,
+            ),
+            "Material" => self.value_object(
+                f.MaterialParameter.useVariable,
+                &f.MaterialParameter.name,
+                f.MaterialParameter.value,
+            ),
+            "Texture" => self.value_object(
+                f.TextureParameter.useVariable,
+                &f.TextureParameter.name,
+                f.TextureParameter.value,
+            ),
+            "Enum" => value_enum(&f.EnumParameter),
+            "Array" => Value::Array(self.array_value(&f.ArrayParameter)),
+            _ => return None,
+        })
+    }
+}
+
+fn value_bool(f: &FsmBool) -> Value {
+    if f.useVariable != 0 {
+        Value::Var(f.name.clone())
+    } else {
+        Value::Bool(f.value != 0)
+    }
+}
+fn value_int(f: &FsmInt) -> Value {
+    if f.useVariable != 0 {
+        Value::Var(f.name.clone())
+    } else {
+        Value::Int(f.value)
+    }
+}
+fn value_float(f: &FsmFloat) -> Value {
+    if f.useVariable != 0 {
+        Value::Var(f.name.clone())
+    } else {
+        Value::Float(f.value)
+    }
+}
+fn value_string(s: &FsmString) -> Value {
+    if s.useVariable != 0 && !s.name.is_empty() {
+        Value::Var(s.name.clone())
+    } else {
+        Value::Str(s.value.clone())
+    }
+}
+fn value_vec(use_var: u8, name: &str, components: Vec<f32>) -> Value {
+    if use_var != 0 && !name.is_empty() {
+        Value::Var(name.to_owned())
+    } else {
+        Value::Vector(components)
+    }
+}
+fn value_enum(e: &FsmEnum) -> Value {
+    if e.useVariable != 0 && !e.name.is_empty() {
+        Value::Var(e.name.clone())
+    } else {
+        Value::Enum {
+            enum_name: e.enumName.clone(),
+            value: e.intValue,
+        }
+    }
 }
 
 /// Resolve a [`Fsm`] into the structured [`FsmModel`], resolving object pointers via `ctx`.
@@ -168,7 +308,15 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
     FsmModel {
         name: &fsm.name,
         start_state: &fsm.startState,
-        event_count: fsm.events.len(),
+        events: fsm
+            .events
+            .iter()
+            .map(|e| Event {
+                name: &e.name,
+                is_global: e.isGlobal != 0,
+                is_system: e.isSystemEvent != 0,
+            })
+            .collect(),
         global_transitions: fsm.globalTransitions.iter().map(transition).collect(),
         states: fsm
             .states
@@ -231,20 +379,56 @@ fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
         .map(|&x| x as usize)
         .unwrap_or(ad.paramName.len());
 
-    (lo as usize..hi)
-        .filter_map(|j| {
-            let dt = *ad.paramDataType.get(j)?;
-            let pos = *ad.paramDataPos.get(j)? as usize;
-            let size = ad.paramByteDataSize.get(j).copied().unwrap_or(0) as usize;
-            let type_name = ptype(dt);
-            let name = ad.paramName.get(j).map(String::as_str).unwrap_or("");
-            Some(Param {
-                name,
-                type_name,
-                value: decode_param(ad, type_name, pos, size, &mut *ctx),
-            })
-        })
-        .collect()
+    let mut out = Vec::new();
+    let mut j = lo as usize;
+    while j < hi {
+        let before = j;
+        match decode_one(ad, &mut j, hi, ctx) {
+            Some(p) => out.push(p),
+            None => break,
+        }
+        if j == before {
+            break;
+        }
+    }
+    out
+}
+
+/// Decode the param at `*j`, advancing `*j` past it. An inline `Array` param consumes the `N`
+/// following entries as its nested elements.
+fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
+    ad: &'a ActionData,
+    j: &mut usize,
+    hi: usize,
+    ctx: &mut Context<'_, R, P>,
+) -> Option<Param<'a>> {
+    let dt = *ad.paramDataType.get(*j)?;
+    let pos = *ad.paramDataPos.get(*j)? as usize;
+    let size = ad.paramByteDataSize.get(*j).copied().unwrap_or(0) as usize;
+    let type_name = ptype(dt);
+    let name = ad.paramName.get(*j).map(String::as_str).unwrap_or("");
+    *j += 1;
+
+    let value = if type_name == "Array" {
+        let n = ad.arrayParamSizes.get(pos).copied().unwrap_or(0).max(0) as usize;
+        let mut elems = Vec::with_capacity(n);
+        for _ in 0..n {
+            if *j >= hi {
+                break;
+            }
+            if let Some(child) = decode_one(ad, j, hi, ctx) {
+                elems.push(child);
+            }
+        }
+        ParamValue::List(elems)
+    } else {
+        decode_param(ad, type_name, pos, size, ctx)
+    };
+    Some(Param {
+        name,
+        type_name,
+        value,
+    })
 }
 
 fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
@@ -298,17 +482,13 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
             ParamValue::Function(Call {
                 function: &f.FunctionName,
                 parameter_type: &f.parameterType,
+                value: ctx.fn_param(f),
             })
         }),
         "FsmTemplateControl" => ad
             .fsmTemplateControlParams
             .get(pos)
             .map(|t| ParamValue::Template(ctx.template_control(t))),
-        "Array" => ad
-            .arrayParamSizes
-            .get(pos)
-            .copied()
-            .map(ParamValue::ArraySize),
         "ObjectReference" | "GameObject" => ad
             .unityObjectParams
             .get(pos)
@@ -390,6 +570,7 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
                 ),
                 type_name: &p.TargetTypeName,
                 property: &p.PropertyName,
+                set: p.setProperty != 0,
             })
         }),
         "FsmAnimationCurve" => ad
@@ -450,8 +631,14 @@ fn curve(c: &FsmAnimationCurve) -> Curve {
                 value: k.value,
                 in_slope: k.inSlope,
                 out_slope: k.outSlope,
+                in_weight: k.inWeight,
+                out_weight: k.outWeight,
+                weighted_mode: k.weightedMode,
             })
             .collect(),
+        pre_infinity: c.curve.m_PreInfinity,
+        post_infinity: c.curve.m_PostInfinity,
+        rotation_order: c.curve.m_RotationOrder,
     }
 }
 

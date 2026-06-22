@@ -37,15 +37,28 @@ pub fn prettify_model(m: &FsmModel) -> String {
         m.name,
         m.start_state,
         m.states.len(),
-        m.event_count
+        m.events.len()
     );
 
     let total_actions: usize = m.states.iter().map(|s| s.actions.len()).sum();
-    if m.states.len() <= 1 && total_actions == 0 && m.event_count == 0 {
+    if m.states.len() <= 1 && total_actions == 0 && m.events.is_empty() {
         let _ = writeln!(
             o,
             "  ⚠ STUB: empty graph, logic lives in C# — variable container only."
         );
+    }
+
+    if !m.events.is_empty() {
+        let _ = writeln!(o, "\nEVENTS:");
+        for e in &m.events {
+            let flags = match (e.is_global, e.is_system) {
+                (true, true) => "  (global, system)",
+                (true, false) => "  (global)",
+                (false, true) => "  (system)",
+                (false, false) => "",
+            };
+            let _ = writeln!(o, "  {}{}", event(e.name), dim(flags));
+        }
     }
 
     if !m.global_transitions.is_empty() {
@@ -103,32 +116,31 @@ fn write_action(o: &mut String, a: &Action) {
         .map(|c| format!("  {}", dim(&format!("\"{c}\""))))
         .unwrap_or_default();
     let _ = writeln!(o, "      · {}{}{}", action(short(a.class)), custom, dis);
-    // array elements follow their `Array` entry flat in the param list; indent them under it.
-    let mut array_remaining = 0usize;
     for p in &a.params {
-        let s = fmt_value(&p.value, p.type_name);
-        let colored = match &p.value {
-            ParamValue::Event(Some(_)) => event(&s),
-            _ if s.starts_with("var ") => var(&s),
-            _ => s,
-        };
-        let name = if p.name.is_empty() { "·" } else { p.name };
-        let indent = if array_remaining > 0 {
-            array_remaining -= 1;
-            "              "
-        } else {
-            "          "
-        };
-        let _ = writeln!(
-            o,
-            "{}{} {} {}",
-            indent,
-            name,
-            dim(&format!(": {} =", p.type_name)),
-            colored
-        );
-        if let ParamValue::ArraySize(n) = &p.value {
-            array_remaining = *n as usize;
+        write_param(o, p, 1);
+    }
+}
+
+fn write_param(o: &mut String, p: &playmakerfsm::model::Param, depth: usize) {
+    let s = fmt_value(&p.value, p.type_name);
+    let colored = match &p.value {
+        ParamValue::Event(Some(_)) => event(&s),
+        _ if s.starts_with("var ") => var(&s),
+        _ => s,
+    };
+    let name = if p.name.is_empty() { "·" } else { p.name };
+    let indent = "    ".repeat(depth + 1);
+    let _ = writeln!(
+        o,
+        "{}{} {} {}",
+        indent,
+        name,
+        dim(&format!(": {} =", p.type_name)),
+        colored
+    );
+    if let ParamValue::List(elems) = &p.value {
+        for e in elems {
+            write_param(o, e, depth + 1);
         }
     }
 }
@@ -159,7 +171,7 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
         ParamValue::Array(a) => fmt_array(a),
         ParamValue::Property(p) => fmt_property(p),
         ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.keys.len()),
-        ParamValue::ArraySize(n) => format!("[{n} elems]"),
+        ParamValue::List(elems) => format!("[{} elems]", elems.len()),
         ParamValue::Pptr(r) => fmt_object_ref(r),
         ParamValue::Raw(bytes) => match longest_ascii_run(bytes) {
             Some(s) => format!("→{s:?}"),
@@ -208,7 +220,7 @@ fn fmt_var(v: &VarValue) -> String {
             format!("({})", parts.join(","))
         }
         VarValue::Enum(i) => format!("enum({i})"),
-        VarValue::Inline => "<inline>".into(),
+        VarValue::Array(a) => fmt_array(a),
     }
 }
 fn fmt_event_target(t: &EventTarget) -> String {
@@ -284,7 +296,7 @@ fn fmt_enum(e: &EnumValue) -> String {
 fn fmt_array(a: &ArrayValue) -> String {
     match a {
         ArrayValue::Var(name) => format!("var {name:?}"),
-        ArrayValue::Values { len, .. } => format!("array[{len} elems]"),
+        ArrayValue::Values(values) => format!("array[{} elems]", values.len()),
     }
 }
 fn fmt_property(p: &Property) -> String {
