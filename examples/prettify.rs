@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 use anyhow::Result;
 use playmakerfsm::model::{
     Action, ArrayValue, Call, Context, EnumValue, EventTarget, FsmModel, GoRef, ObjectRef,
-    ParamValue, Property, RefTarget, State, StrValue, TemplateControl, Transition, VarOverride,
-    VarValue, decode_fsm, longest_ascii_run,
+    ParamValue, Property, RefTarget, State, StrValue, TemplateControl, Transition, Value,
+    VarOverride, VarValue, decode_fsm, longest_ascii_run,
 };
 use playmakerfsm::raw::*;
 use rabex::objects::pptr::PathId;
@@ -250,9 +250,30 @@ fn fmt_event_target(t: &EventTarget) -> String {
 }
 fn fmt_function(f: &Call) -> String {
     if f.parameter_type.is_empty() || f.parameter_type == "None" {
-        format!("{}()", f.function)
-    } else {
-        format!("{}(<{}>)", f.function, f.parameter_type)
+        return format!("{}()", f.function);
+    }
+    match &f.value {
+        Some(v) => format!("{}({})", f.function, fmt_call_value(v)),
+        // fall back to the bare type when the value couldn't be decoded
+        None => format!("{}(<{}>)", f.function, f.parameter_type),
+    }
+}
+
+// the active parameter value of a FunctionCall (selected by `parameter_type` in decode.rs)
+fn fmt_call_value(v: &Value) -> String {
+    match v {
+        Value::Var(name) => format!("var {}", q(name)),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Str(s) => q(s),
+        Value::Vector(comps) => {
+            let comps = comps.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
+            format!("({comps})")
+        }
+        Value::Enum { enum_name, value } => format!("{}({value})", short(enum_name)),
+        Value::Object(r) => fmt_object_ref(r),
+        Value::Array(a) => fmt_array(a),
     }
 }
 fn fmt_template(t: &TemplateControl) -> String {

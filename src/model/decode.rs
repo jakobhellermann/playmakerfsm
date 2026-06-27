@@ -178,17 +178,22 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
 
     /// The value of a [`FunctionCall`]'s active parameter, selected by its `parameterType`.
     fn fn_param(&mut self, f: &FunctionCall) -> Option<Value> {
-        Some(match f.parameterType.as_str() {
-            "Bool" => value_bool(&f.BoolParameter),
-            "Int" => value_int(&f.IntParameter),
-            "Float" => value_float(&f.FloatParameter),
-            "String" => value_string(&f.StringParameter),
-            "Vector2" => value_vec(
+        // PlayMaker stores `parameterType` as the C# type name: keyword-aliased and lowercase for
+        // primitives (`bool`, `int`, `float`, `string`, `object`), the bare type name for the rest
+        // (`Vector2`, `GameObject`, `Enum`, …). Match case-insensitively so neither casing slips
+        // through to the catch-all (which is now a hard error).
+        Some(match f.parameterType.to_ascii_lowercase().as_str() {
+            "none" | "" => return None,
+            "bool" => value_bool(&f.BoolParameter),
+            "int" => value_int(&f.IntParameter),
+            "float" => value_float(&f.FloatParameter),
+            "string" => value_string(&f.StringParameter),
+            "vector2" => value_vec(
                 f.Vector2Parameter.useVariable,
                 &f.Vector2Parameter.name,
                 vec![f.Vector2Parameter.value.x, f.Vector2Parameter.value.y],
             ),
-            "Vector3" => value_vec(
+            "vector3" => value_vec(
                 f.Vector3Parameter.useVariable,
                 &f.Vector3Parameter.name,
                 vec![
@@ -197,7 +202,7 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
                     f.Vector3Parameter.value.z,
                 ],
             ),
-            "Quaternion" => value_vec(
+            "quaternion" => value_vec(
                 f.QuaternionParameter.useVariable,
                 &f.QuaternionParameter.name,
                 vec![
@@ -207,7 +212,7 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
                     f.QuaternionParameter.value.w,
                 ],
             ),
-            "Color" => value_vec(
+            "color" => value_vec(
                 f.ColorParameter.useVariable,
                 &f.ColorParameter.name,
                 vec![
@@ -217,7 +222,7 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
                     f.ColorParameter.value.a,
                 ],
             ),
-            "Rect" => value_vec(
+            "rect" => value_vec(
                 f.RectParamater.useVariable,
                 &f.RectParamater.name,
                 vec![
@@ -227,29 +232,29 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
                     f.RectParamater.value.height,
                 ],
             ),
-            "GameObject" => self.value_object(
+            "gameobject" => self.value_object(
                 f.GameObjectParameter.useVariable,
                 &f.GameObjectParameter.name,
                 f.GameObjectParameter.value,
             ),
-            "Object" => self.value_object(
+            "object" => self.value_object(
                 f.ObjectParameter.useVariable,
                 &f.ObjectParameter.name,
                 f.ObjectParameter.value,
             ),
-            "Material" => self.value_object(
+            "material" => self.value_object(
                 f.MaterialParameter.useVariable,
                 &f.MaterialParameter.name,
                 f.MaterialParameter.value,
             ),
-            "Texture" => self.value_object(
+            "texture" => self.value_object(
                 f.TextureParameter.useVariable,
                 &f.TextureParameter.name,
                 f.TextureParameter.value,
             ),
-            "Enum" => value_enum(&f.EnumParameter),
-            "Array" => Value::Array(self.array_value(&f.ArrayParameter)),
-            _ => return None,
+            "enum" => value_enum(&f.EnumParameter),
+            "array" => Value::Array(self.array_value(&f.ArrayParameter)),
+            other => unreachable!("unknown FunctionCall parameterType: {other:?}"),
         })
     }
 }
