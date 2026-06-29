@@ -328,7 +328,7 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
             .iter()
             .map(|s| decode_state(s, &fsm.startState, fsm.dataVersion, &mut *ctx))
             .collect(),
-        variables: decode_variables(&fsm.variables),
+        variables: decode_variables(&fsm.variables, &mut *ctx),
     }
 }
 
@@ -763,35 +763,51 @@ pub fn longest_ascii_run(bytes: &[u8]) -> Option<String> {
     (best.len() >= 2).then_some(best)
 }
 
-fn decode_variables(v: &FsmVariables) -> Vec<Variable<'_>> {
+fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
+    v: &'a FsmVariables,
+    ctx: &mut Context<'_, R, P>,
+) -> Vec<Variable<'a>> {
     let mut out = Vec::new();
+    // each variable's `value` is its authored default; `useVariable`/`name` (the reference machinery
+    // the param helpers honour) is irrelevant on a variable definition, so read the value directly.
     macro_rules! push {
-        ($field:ident, $label:literal) => {
-            for x in &v.$field {
-                if !x.name.is_empty() {
-                    out.push(Variable {
-                        name: &x.name,
-                        category: $label,
-                    });
+        ($field:ident, $label:literal, |$x:ident| $value:expr) => {
+            for $x in &v.$field {
+                if !$x.name.is_empty() {
+                    out.push(Variable { name: &$x.name, category: $label, value: $value });
                 }
             }
         };
     }
-    push!(floatVariables, "float");
-    push!(intVariables, "int");
-    push!(boolVariables, "bool");
-    push!(stringVariables, "string");
-    push!(vector2Variables, "vector2");
-    push!(vector3Variables, "vector3");
-    push!(colorVariables, "color");
-    push!(rectVariables, "rect");
-    push!(quaternionVariables, "quaternion");
-    push!(gameObjectVariables, "gameObject");
-    push!(objectVariables, "object");
-    push!(materialVariables, "material");
-    push!(textureVariables, "texture");
-    push!(arrayVariables, "array");
-    push!(enumVariables, "enum");
+    push!(floatVariables, "float", |x| Value::Float(x.value));
+    push!(intVariables, "int", |x| Value::Int(x.value));
+    push!(boolVariables, "bool", |x| Value::Bool(x.value != 0));
+    push!(stringVariables, "string", |x| Value::Str(x.value.clone()));
+    push!(vector2Variables, "vector2", |x| Value::Vector(vec![x.value.x, x.value.y]));
+    push!(vector3Variables, "vector3", |x| Value::Vector(vec![
+        x.value.x, x.value.y, x.value.z
+    ]));
+    push!(colorVariables, "color", |x| Value::Vector(vec![
+        x.value.r, x.value.g, x.value.b, x.value.a
+    ]));
+    push!(rectVariables, "rect", |x| Value::Vector(vec![
+        x.value.x,
+        x.value.y,
+        x.value.width,
+        x.value.height
+    ]));
+    push!(quaternionVariables, "quaternion", |x| Value::Vector(vec![
+        x.value.x, x.value.y, x.value.z, x.value.w
+    ]));
+    push!(gameObjectVariables, "gameObject", |x| Value::Object(ctx.resolve(x.value)));
+    push!(objectVariables, "object", |x| Value::Object(ctx.resolve(x.value)));
+    push!(materialVariables, "material", |x| Value::Object(ctx.resolve(x.value)));
+    push!(textureVariables, "texture", |x| Value::Object(ctx.resolve(x.value)));
+    push!(arrayVariables, "array", |x| Value::Array(ctx.array_value(x)));
+    push!(enumVariables, "enum", |x| Value::Enum {
+        enum_name: x.enumName.clone(),
+        value: x.intValue,
+    });
     out
 }
 

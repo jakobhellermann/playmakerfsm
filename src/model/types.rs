@@ -268,6 +268,9 @@ pub enum ParamValue<'a> {
 pub struct Variable<'a> {
     pub name: &'a str,
     pub category: &'static str,
+    /// The variable's authored initial value (its FSM-editor default). At runtime actions may
+    /// overwrite it; this is what the FSM ships with.
+    pub value: Value,
 }
 
 /// A RunFSM template binding: the template to run plus how the parent FSM's variables and

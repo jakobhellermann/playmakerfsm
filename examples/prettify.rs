@@ -76,7 +76,13 @@ pub fn prettify_model(m: &FsmModel) -> String {
     if !m.variables.is_empty() {
         let _ = writeln!(o, "\nVARIABLES:");
         for v in &m.variables {
-            let _ = writeln!(o, "  {} {}", dim(&format!("({})", v.category)), var(v.name));
+            let _ = writeln!(
+                o,
+                "  {} {} = {}",
+                dim(&format!("({})", v.category)),
+                var(v.name),
+                fmt_call_value(&v.value)
+            );
         }
     }
     o
