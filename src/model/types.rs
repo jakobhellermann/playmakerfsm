@@ -235,6 +235,13 @@ pub enum ParamValue<'a> {
     /// A plain C# enum param resolved to its member name (e.g. `operation` -> "Multiply"). The enum
     /// type isn't in the FSM data, so this is filled in at content-build time from the game assembly.
     EnumMember(Cow<'a, str>),
+    /// A layer-index param resolved to its Unity layer name (from the TagManager). Like
+    /// [`EnumMember`](Self::EnumMember), the names aren't in the FSM data, so this is filled in at
+    /// content-build time. `name` is `None` when the index has no named layer.
+    Layer {
+        index: i32,
+        name: Option<Cow<'a, str>>,
+    },
     Array(ArrayValue),
     Property(Property<'a>),
     AnimCurve(Curve),

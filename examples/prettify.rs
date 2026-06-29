@@ -169,6 +169,9 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
         ParamValue::Template(t) => fmt_template(t),
         ParamValue::Enum(e) => fmt_enum(e),
         ParamValue::EnumMember(m) => m.to_string(),
+        ParamValue::Layer { index, name } => name
+            .as_deref()
+            .map_or_else(|| format!("layer {index}"), str::to_string),
         ParamValue::Array(a) => fmt_array(a),
         ParamValue::Property(p) => fmt_property(p),
         ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.keys.len()),
@@ -268,7 +271,11 @@ fn fmt_call_value(v: &Value) -> String {
         Value::Float(f) => f.to_string(),
         Value::Str(s) => q(s),
         Value::Vector(comps) => {
-            let comps = comps.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
+            let comps = comps
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("({comps})")
         }
         Value::Enum { enum_name, value } => format!("{}({value})", short(enum_name)),
