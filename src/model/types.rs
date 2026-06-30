@@ -180,10 +180,20 @@ pub struct Transition<'a> {
     pub to_state: &'a str,
 }
 
+/// The state's node rectangle in the PlayMaker editor graph (raw authored layout).
+#[derive(serde::Serialize)]
+pub struct StatePos {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 #[derive(serde::Serialize)]
 pub struct State<'a> {
     pub name: &'a str,
     pub is_start: bool,
+    pub position: StatePos,
     pub transitions: Vec<Transition<'a>>,
     pub actions: Vec<Action<'a>>,
 }
