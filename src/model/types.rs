@@ -193,6 +193,8 @@ pub struct StatePos {
 pub struct State<'a> {
     pub name: &'a str,
     pub is_start: bool,
+    /// Author-assigned PlayMaker colour group (0..=7 palette index; used only for display).
+    pub color_index: u8,
     pub position: StatePos,
     pub transitions: Vec<Transition<'a>>,
     pub actions: Vec<Action<'a>>,

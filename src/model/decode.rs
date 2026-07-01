@@ -364,6 +364,7 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
     State {
         name: &s.name,
         is_start: s.name == start,
+        color_index: s.colorIndex,
         position: StatePos {
             x: s.position.x,
             y: s.position.y,
