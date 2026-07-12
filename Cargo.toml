@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 dotnetdll = "0.2"
-rabex = "0.1"
+rabex = "0.2"
 rabex-env = { version = "0.1", path = "../rabex-env" }
 serde = { version = "1.0", features = ["derive"] }
 
