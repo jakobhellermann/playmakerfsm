@@ -300,13 +300,23 @@ fn property(property: &Property<'_>) -> String {
     format!("{member} on {}", go_ref(&property.target))
 }
 
-/// A curve as its `time:value` keys. Tangents and weights are left out: they
-/// shape the interpolation but say nothing about what the action does.
+/// A curve as its keyframes, under Unity's own field names. The slopes are the
+/// shape: eight of Silksong's fifteen curves share their `time`/`value` pairs
+/// and differ only there. Weights and the infinity modes are left out — read
+/// the object itself for those.
 fn curve(curve: &Curve) -> String {
     let keys: Vec<String> = curve
         .keys
         .iter()
-        .map(|k| format!("{}:{}", num(k.time), num(k.value)))
+        .map(|k| {
+            format!(
+                "(time={}, value={}, inSlope={}, outSlope={})",
+                num(k.time),
+                num(k.value),
+                num(k.in_slope),
+                num(k.out_slope)
+            )
+        })
         .collect();
     format!("curve[{}]", keys.join(", "))
 }
@@ -354,8 +364,18 @@ fn q(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| format!("{s:?}"))
 }
 
+/// A float as the model's own JSON spells it — Rust would print `inf` where the
+/// serialized form (and JavaScript) says `Infinity`, and the two renderings of a
+/// curve would disagree.
 fn num(f: f32) -> String {
-    format!("{f}")
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    match f.is_infinite() {
+        true if f > 0.0 => "Infinity".to_string(),
+        true => "-Infinity".to_string(),
+        false => format!("{f}"),
+    }
 }
 
 fn vector(components: &[f32]) -> String {
@@ -518,7 +538,7 @@ mod tests {
             "  state Init {\n",
             "    SetBoolValue(boolVariable=var \"On\", boolValue=true, finishEvent=(none), ",
             "target=Self, colour=(1, 0.5, 0), offset=(1, 2), ",
-            "property=Transform.position on var \"Target\", curve=curve[0:1], parameters=[3], ",
+            "property=Transform.position on var \"Target\", curve=curve[(time=0, value=1, inSlope=0, outSlope=0)], parameters=[3], ",
             "sendTo=GameObjectFSM(var \"Bell\", fsm=\"Control\"))  // arm the bell\n",
             "    on FINISHED → Idle\n",
             "  }\n",
