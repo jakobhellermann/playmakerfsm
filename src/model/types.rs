@@ -172,6 +172,10 @@ pub struct VarOverride {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FsmModel<'a> {
     pub name: Cow<'a, str>,
+    /// `m_Name` of the `FsmTemplate` this FSM was built from, if any. The states
+    /// and actions below are then the template's, and only the name and the
+    /// inspector-exposed variables come from the component running it.
+    pub template_name: Option<Cow<'a, str>>,
     pub start_state: Cow<'a, str>,
     pub events: Vec<Event<'a>>,
     pub global_transitions: Vec<Transition<'a>>,
@@ -289,6 +293,9 @@ pub enum ParamValue<'a> {
 pub struct Variable<'a> {
     pub name: Cow<'a, str>,
     pub category: Cow<'a, str>,
+    /// Exposed in the PlayMaker inspector, which is what makes it settable per
+    /// instance when an FSM runs a template.
+    pub show_in_inspector: bool,
     /// The variable's authored initial value (its FSM-editor default). At runtime actions may
     /// overwrite it; this is what the FSM ships with.
     pub value: Value,
@@ -338,6 +345,7 @@ mod tests {
         };
         FsmModel {
             name: "Bench Control".into(),
+            template_name: Some("bench_control".into()),
             start_state: "Init".into(),
             events: vec![Event {
                 name: "FINISHED".into(),
@@ -351,6 +359,7 @@ mod tests {
             variables: vec![Variable {
                 name: "Activated".into(),
                 category: "bool".into(),
+                show_in_inspector: true,
                 value: Value::Bool(false),
             }],
             states: vec![State {

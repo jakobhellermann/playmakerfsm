@@ -6,7 +6,7 @@
 //! (Boolean/Integer/Float and the packed Fsm-wrappers/FsmEvent) live in flat `byteData` at
 //! `paramDataPos` (`paramByteDataSize` = length), packed as `[value(n)][useVariable(1)][name(rest)]`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::types::*;
 use crate::raw::*;
@@ -319,6 +319,8 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
 ) -> FsmModel<'a> {
     FsmModel {
         name: fsm.name.as_str().into(),
+        // only a component knows whether it runs a template
+        template_name: None,
         start_state: fsm.startState.as_str().into(),
         events: fsm
             .events
@@ -815,6 +817,7 @@ pub fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
                         out.push(Variable {
                             name: $x.name.as_str().into(),
                             category: $label.into(),
+                            show_in_inspector: $x.showInInspector != 0,
                             value,
                         });
                     }
@@ -928,37 +931,6 @@ pub fn ptype(i: i32) -> &'static str {
         .unwrap_or("?")
 }
 
-/// `(category, name)` of every variable the FSM exposes in the PlayMaker
-/// inspector.
-fn inspector_exposed(v: &FsmVariables) -> HashSet<(&'static str, &str)> {
-    let mut out = HashSet::new();
-    macro_rules! push {
-        ($field:ident, $label:literal) => {
-            for x in &v.$field {
-                if x.showInInspector != 0 && !x.name.is_empty() {
-                    out.insert(($label, x.name.as_str()));
-                }
-            }
-        };
-    }
-    push!(floatVariables, "float");
-    push!(intVariables, "int");
-    push!(boolVariables, "bool");
-    push!(stringVariables, "string");
-    push!(vector2Variables, "vector2");
-    push!(vector3Variables, "vector3");
-    push!(colorVariables, "color");
-    push!(rectVariables, "rect");
-    push!(quaternionVariables, "quaternion");
-    push!(gameObjectVariables, "gameObject");
-    push!(objectVariables, "object");
-    push!(materialVariables, "material");
-    push!(textureVariables, "texture");
-    push!(arrayVariables, "array");
-    push!(enumVariables, "enum");
-    out
-}
-
 /// PlayMaker's `FsmVariables.OverrideVariableValues`: an FSM built from a
 /// template keeps the template's variables, but every variable the template
 /// exposes in the inspector takes its value from the instance.
@@ -967,17 +939,15 @@ fn inspector_exposed(v: &FsmVariables) -> HashSet<(&'static str, &str)> {
 /// `FsmVariables` of the component running it.
 pub fn override_inspector_values<'a, R: EnvResolver, P: TypeTreeProvider>(
     variables: &mut [Variable<'a>],
-    template: &FsmVariables,
     instance: &'a FsmVariables,
     ctx: &mut Context<'_, R, P>,
 ) {
-    let exposed = inspector_exposed(template);
-    if exposed.is_empty() {
+    if !variables.iter().any(|v| v.show_in_inspector) {
         return;
     }
     let overrides = decode_variables(instance, ctx);
     for variable in variables {
-        if !exposed.contains(&(variable.category.as_ref(), variable.name.as_ref())) {
+        if !variable.show_in_inspector {
             continue;
         }
         if let Some(instance_value) = overrides

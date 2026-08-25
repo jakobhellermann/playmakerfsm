@@ -60,11 +60,11 @@ impl ComponentFsm {
         let template_file = file.deref(self.component.fsmTemplate)?;
         let mut model = decode_fsm(&template.fsm, &mut Context::new(&template_file.file));
         model.name = self.component.fsm.name.as_str().into();
+        model.template_name = Some(template.m_Name.as_str().into());
         // The component's variable values reach the template FSM, and its object
         // references point into the component's file, not the template's.
         override_inspector_values(
             &mut model.variables,
-            &template.fsm.variables,
             &self.component.fsm.variables,
             &mut Context::new(file),
         );
