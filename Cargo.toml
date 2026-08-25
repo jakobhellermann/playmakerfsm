@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0"
 dotnetdll = "0.2"
 rabex = "0.2"
 rabex-env = { version = "0.1", git = "https://github.com/jakobhellermann/rabex-env" }
@@ -11,7 +12,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [dev-dependencies]
-anyhow = "1.0"
 dotnetdll = "0.2"
 rayon = "1.10"
 serde-value = { git = "https://github.com/jakobhellermann/serde-value", branch = "preserve-order", features = [
