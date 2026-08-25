@@ -359,10 +359,13 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
         .enumerate()
         .map(|(ai, cls)| Action {
             class: cls.as_str().into(),
+            // `ActionData` stores `~AutoName` for an action the editor names
+            // after its class (`autoNameString`), so that is the absence of a
+            // custom name rather than one.
             custom_name: ad
                 .customNames
                 .get(ai)
-                .filter(|c| !c.is_empty())
+                .filter(|c| !c.is_empty() && *c != "~AutoName")
                 .map(|c| c.as_str().into()),
             enabled: ad.actionEnabled.get(ai) != Some(&0),
             params: decode_params(ad, ai, version, &mut *ctx),
