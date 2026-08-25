@@ -421,7 +421,8 @@ fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
 }
 
 /// Decode the param at `*j`, advancing `*j` past it. An inline `Array` param consumes the `N`
-/// following entries as its nested elements.
+/// following entries as its elements, a `CustomClass` param the `N` following entries as its
+/// fields.
 fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
     ad: &'a ActionData,
     j: &mut usize,
@@ -448,6 +449,28 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
             }
         }
         ParamValue::List(elems)
+    } else if type_name == "CustomClass" {
+        // `paramDataPos` indexes the custom-type tables rather than a value
+        // array: the size says how many of the following params are its fields,
+        // and those can be nested classes themselves.
+        // Indexed rather than probed: a miss would take zero fields and read this
+        // class's own fields as its siblings, shifting every param after it.
+        let n = ad.customTypeSizes[pos].max(0) as usize;
+        let class = ad.customTypeNames[pos].as_str();
+        let mut fields = Vec::with_capacity(n);
+        for _ in 0..n {
+            assert!(
+                *j < hi,
+                "class {class:?} declares {n} fields, which run past the action's params"
+            );
+            if let Some(child) = decode_one(ad, j, hi, version, ctx) {
+                fields.push(child);
+            }
+        }
+        ParamValue::Class {
+            class: class.into(),
+            fields,
+        }
     } else {
         decode_param(ad, type_name, pos, size, version, ctx)
     };

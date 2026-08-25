@@ -282,6 +282,13 @@ pub enum ParamValue<'a> {
     AnimCurve(Curve),
     /// An inline `Array` param: its element params, nested.
     List(Vec<Param<'a>>),
+    /// A nested serializable class (`ParamDataType.CustomClass`). It carries no
+    /// bytes of its own — `ActionData` writes the class name and its field count,
+    /// then the fields themselves as the params that follow.
+    Class {
+        class: Cow<'a, str>,
+        fields: Vec<Param<'a>>,
+    },
     /// Unity object reference (`ObjectReference`/`GameObject`), resolved to a stable address.
     Pptr(ObjectRef),
 
@@ -533,6 +540,18 @@ mod tests {
                             name: "raw".into(),
                             type_name: "Unsupported".into(),
                             value: ParamValue::Raw(vec![1, 2, 3].into()),
+                        },
+                        Param {
+                            name: "nested".into(),
+                            type_name: "CustomClass".into(),
+                            value: ParamValue::Class {
+                                class: "Ns.Action+Config".into(),
+                                fields: vec![Param {
+                                    name: "Spacing".into(),
+                                    type_name: "FsmFloat".into(),
+                                    value: ParamValue::Float(0.5),
+                                }],
+                            },
                         },
                     ],
                 }],

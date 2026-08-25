@@ -169,6 +169,9 @@ fn param_value(value_: &ParamValue<'_>) -> String {
         ParamValue::Property(p) => property(p),
         ParamValue::AnimCurve(c) => curve(c),
         ParamValue::List(items) => format!("[{}]", params(items)),
+        // the class name is the action's own nested type, so the field name
+        // above already says which one this is
+        ParamValue::Class { fields, .. } => format!("{{{}}}", params(fields)),
         ParamValue::Pptr(r) => object_ref(r),
         // Params the decoder couldn't make sense of keep their byte length, so
         // a changed blob still shows up as a change.
@@ -483,6 +486,16 @@ mod tests {
                                 ParamValue::List(vec![param("", ParamValue::Int(3))]),
                             ),
                             param(
+                                "From",
+                                ParamValue::Class {
+                                    class: "Ns.Action+Config".into(),
+                                    fields: vec![
+                                        param("Spacing", ParamValue::Float(0.0)),
+                                        param("Vibrancy", ParamValue::Float(1.0)),
+                                    ],
+                                },
+                            ),
+                            param(
                                 "sendTo",
                                 ParamValue::EventTarget(EventTarget {
                                     kind: 2,
@@ -539,6 +552,7 @@ mod tests {
             "    SetBoolValue(boolVariable=var \"On\", boolValue=true, finishEvent=(none), ",
             "target=Self, colour=(1, 0.5, 0), offset=(1, 2), ",
             "property=Transform.position on var \"Target\", curve=curve[(time=0, value=1, inSlope=0, outSlope=0)], parameters=[3], ",
+            "From={Spacing=0, Vibrancy=1}, ",
             "sendTo=GameObjectFSM(var \"Bell\", fsm=\"Control\"))  // arm the bell\n",
             "    on FINISHED → Idle\n",
             "  }\n",

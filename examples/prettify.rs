@@ -145,10 +145,13 @@ fn write_param(o: &mut String, p: &playmakerfsm::model::Param, depth: usize) {
         dim(&format!(": {} =", p.type_name)),
         colored
     );
-    if let ParamValue::List(elems) = &p.value {
-        for e in elems {
-            write_param(o, e, depth + 1);
-        }
+    let nested = match &p.value {
+        ParamValue::List(elems) => Some(elems),
+        ParamValue::Class { fields, .. } => Some(fields),
+        _ => None,
+    };
+    for e in nested.into_iter().flatten() {
+        write_param(o, e, depth + 1);
     }
 }
 
@@ -183,6 +186,9 @@ fn fmt_value(v: &ParamValue, type_name: &str) -> String {
         ParamValue::Property(p) => fmt_property(p),
         ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.keys.len()),
         ParamValue::List(elems) => format!("[{} elems]", elems.len()),
+        ParamValue::Class { class, fields } => {
+            format!("{} {{{} fields}}", short(class), fields.len())
+        }
         ParamValue::Pptr(r) => fmt_object_ref(r),
         ParamValue::Raw(bytes) => match longest_ascii_run(bytes) {
             Some(s) => format!("→{s:?}"),
