@@ -6,6 +6,8 @@
 //! (Boolean/Integer/Float and the packed Fsm-wrappers/FsmEvent) live in flat `byteData` at
 //! `paramDataPos` (`paramByteDataSize` = length), packed as `[value(n)][useVariable(1)][name(rest)]`.
 
+use std::collections::{HashMap, HashSet};
+
 use super::types::*;
 use crate::raw::*;
 use rabex_env::handle::SerializedFileHandle;
@@ -14,7 +16,6 @@ use rabex_env::rabex::objects::PPtr;
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use std::borrow::Cow;
-use std::collections::HashSet;
 
 /// Decoding context: resolves object pointers to stable [`ObjectRef`]s. Created per serialized file
 /// and reused across the FSMs in it.
@@ -774,18 +775,46 @@ pub fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
     v: &'a FsmVariables,
     ctx: &mut Context<'_, R, P>,
 ) -> Vec<Variable<'a>> {
-    let mut out = Vec::new();
+    let mut out: Vec<Variable> = Vec::new();
+    // `FsmVariables.AddVariableLookup` keys every variable by name in one
+    // dictionary and keeps the first of a repeated name, so a later duplicate
+    // cannot be read or written by anything. Nameless ones never enter the
+    // lookup at all. Both are skipped here, or the model would describe
+    // variables the FSM has no way to address.
+    //
+    // Every repeat seen so far carries the same value, so which one survives is
+    // not a decision. One that differs would mean this reading is incomplete.
+    let mut addressable: HashMap<&str, usize> = HashMap::new();
     // each variable's `value` is its authored default; `useVariable`/`name` (the reference machinery
     // the param helpers honour) is irrelevant on a variable definition, so read the value directly.
     macro_rules! push {
         ($field:ident, $label:literal, |$x:ident| $value:expr) => {
             for $x in &v.$field {
-                if !$x.name.is_empty() {
-                    out.push(Variable {
-                        name: $x.name.as_str().into(),
-                        category: $label.into(),
-                        value: $value,
-                    });
+                if $x.name.is_empty() {
+                    continue;
+                }
+                let value = $value;
+                match addressable.get(&$x.name.as_str()) {
+                    Some(&first) => {
+                        let kept = &out[first];
+                        assert!(
+                            same_value(&kept.value, &value),
+                            "variable {:?} is repeated with a different value: {} {:?} vs {} {:?}",
+                            $x.name,
+                            kept.category,
+                            kept.value,
+                            $label,
+                            value,
+                        );
+                    }
+                    None => {
+                        addressable.insert($x.name.as_str(), out.len());
+                        out.push(Variable {
+                            name: $x.name.as_str().into(),
+                            category: $label.into(),
+                            value,
+                        });
+                    }
                 }
             }
         };
@@ -832,6 +861,13 @@ pub fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
         value: x.intValue,
     });
     out
+}
+
+/// Compare two authored values through their serialized form, so a NaN — which
+/// is never equal to itself as an `f32` — does not read as a difference.
+fn same_value(a: &Value, b: &Value) -> bool {
+    let render = |v| serde_json::to_string(v).expect("an authored value serializes");
+    render(a) == render(b)
 }
 
 /// PlayMaker `ParamDataType` ordinal -> name. `paramDataType` indexes into this.
