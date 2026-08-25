@@ -14,6 +14,7 @@ use rabex_env::rabex::objects::PPtr;
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 /// Decoding context: resolves object pointers to stable [`ObjectRef`]s. Created per serialized file
 /// and reused across the FSMs in it.
@@ -769,7 +770,7 @@ pub fn longest_ascii_run(bytes: &[u8]) -> Option<String> {
     (best.len() >= 2).then_some(best)
 }
 
-fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
+pub fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
     v: &'a FsmVariables,
     ctx: &mut Context<'_, R, P>,
 ) -> Vec<Variable<'a>> {
@@ -886,4 +887,65 @@ pub fn ptype(i: i32) -> &'static str {
         .and_then(|i| PARAM_TYPES.get(i))
         .copied()
         .unwrap_or("?")
+}
+
+/// `(category, name)` of every variable the FSM exposes in the PlayMaker
+/// inspector.
+fn inspector_exposed(v: &FsmVariables) -> HashSet<(&'static str, &str)> {
+    let mut out = HashSet::new();
+    macro_rules! push {
+        ($field:ident, $label:literal) => {
+            for x in &v.$field {
+                if x.showInInspector != 0 && !x.name.is_empty() {
+                    out.insert(($label, x.name.as_str()));
+                }
+            }
+        };
+    }
+    push!(floatVariables, "float");
+    push!(intVariables, "int");
+    push!(boolVariables, "bool");
+    push!(stringVariables, "string");
+    push!(vector2Variables, "vector2");
+    push!(vector3Variables, "vector3");
+    push!(colorVariables, "color");
+    push!(rectVariables, "rect");
+    push!(quaternionVariables, "quaternion");
+    push!(gameObjectVariables, "gameObject");
+    push!(objectVariables, "object");
+    push!(materialVariables, "material");
+    push!(textureVariables, "texture");
+    push!(arrayVariables, "array");
+    push!(enumVariables, "enum");
+    out
+}
+
+/// PlayMaker's `FsmVariables.OverrideVariableValues`: an FSM built from a
+/// template keeps the template's variables, but every variable the template
+/// exposes in the inspector takes its value from the instance.
+///
+/// `variables` are the template's, decoded; `instance` is the raw
+/// `FsmVariables` of the component running it.
+pub fn override_inspector_values<'a, R: EnvResolver, P: TypeTreeProvider>(
+    variables: &mut [Variable<'a>],
+    template: &FsmVariables,
+    instance: &'a FsmVariables,
+    ctx: &mut Context<'_, R, P>,
+) {
+    let exposed = inspector_exposed(template);
+    if exposed.is_empty() {
+        return;
+    }
+    let overrides = decode_variables(instance, ctx);
+    for variable in variables {
+        if !exposed.contains(&(variable.category.as_ref(), variable.name.as_ref())) {
+            continue;
+        }
+        if let Some(instance_value) = overrides
+            .iter()
+            .find(|o| o.category == variable.category && o.name == variable.name)
+        {
+            variable.value = instance_value.value.clone();
+        }
+    }
 }

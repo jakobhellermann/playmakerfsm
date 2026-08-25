@@ -3,7 +3,4 @@ game_paths = [
   "~/.steamapps/Hollow Knight Silksong",
 ]
 scripts."PlayMaker.dll" = ["PlayMakerFSM"]
-field_ignores = [
-  # noisy
-  "showInInspector",
-]
+field_ignores = []

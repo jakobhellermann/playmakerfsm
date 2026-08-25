@@ -11,7 +11,7 @@ use rabex_env::rabex::objects::pptr::PathId;
 use rabex_env::rabex::typetree::TypeTreeProvider;
 use rabex_env::resolver::EnvResolver;
 
-use crate::model::{Context, FsmModel, decode_fsm};
+use crate::model::{Context, FsmModel, decode_fsm, override_inspector_values};
 use crate::raw::{FsmTemplate, PlayMakerFSM};
 
 /// `MonoScript::full_name()` of the component this module reads.
@@ -60,6 +60,14 @@ impl ComponentFsm {
         let template_file = file.deref(self.component.fsmTemplate)?;
         let mut model = decode_fsm(&template.fsm, &mut Context::new(&template_file.file));
         model.name = self.component.fsm.name.as_str().into();
+        // The component's variable values reach the template FSM, and its object
+        // references point into the component's file, not the template's.
+        override_inspector_values(
+            &mut model.variables,
+            &template.fsm.variables,
+            &self.component.fsm.variables,
+            &mut Context::new(file),
+        );
         Ok(model)
     }
 }

@@ -194,6 +194,7 @@ pub struct FsmFloat {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: f32,
 }
@@ -203,6 +204,7 @@ pub struct FsmInt {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: i32,
 }
@@ -212,6 +214,7 @@ pub struct FsmBool {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: u8,
 }
@@ -221,6 +224,7 @@ pub struct FsmString {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: String,
 }
@@ -230,6 +234,7 @@ pub struct FsmVector2 {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: Vector2,
 }
@@ -239,6 +244,7 @@ pub struct FsmVector3 {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: Vector3,
 }
@@ -248,6 +254,7 @@ pub struct FsmColor {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: Color,
 }
@@ -257,6 +264,7 @@ pub struct FsmRect {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: Rect,
 }
@@ -266,6 +274,7 @@ pub struct FsmQuaternion {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: Quaternion,
 }
@@ -275,6 +284,7 @@ pub struct FsmGameObject {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub value: PPtr, /* GameObject */
 }
@@ -284,6 +294,7 @@ pub struct FsmObject {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub typeName: String,
     pub value: PPtr, /* Object */
@@ -294,6 +305,7 @@ pub struct FsmMaterial {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub typeName: String,
     pub value: PPtr, /* Object */
@@ -304,6 +316,7 @@ pub struct FsmTexture {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub typeName: String,
     pub value: PPtr, /* Object */
@@ -314,6 +327,7 @@ pub struct FsmArray {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub r#type: i32,
     pub objectTypeName: String,
@@ -330,6 +344,7 @@ pub struct FsmEnum {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
     pub enumName: String,
     pub intValue: i32,
@@ -521,5 +536,6 @@ pub struct NamedVariable {
     pub useVariable: u8,
     pub name: String,
     pub tooltip: String,
+    pub showInInspector: u8,
     pub networkSync: u8,
 }
