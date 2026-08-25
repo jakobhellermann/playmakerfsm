@@ -113,7 +113,7 @@ fn param_value(value_: &ParamValue<'_>) -> String {
         ParamValue::Bool(b) => b.to_string(),
         ParamValue::Int(i) => i.to_string(),
         ParamValue::Float(f) => num(*f),
-        ParamValue::Vector(components) => vector(components, ", "),
+        ParamValue::Vector(components) => vector(components),
         ParamValue::PackedVar(None) => "(unset)".to_string(),
         ParamValue::PackedVar(Some(name)) => format!("var {}", q(name)),
         ParamValue::Event(None) => "(none)".to_string(),
@@ -149,7 +149,7 @@ fn value(value_: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => num(*f),
         Value::Str(s) => q(s),
-        Value::Vector(components) => vector(components, ", "),
+        Value::Vector(components) => vector(components),
         Value::Enum { enum_name, value } => format!("{}({value})", short(enum_name)),
         Value::Object(r) => object_ref(r),
         Value::Array(a) => array_value(a),
@@ -166,7 +166,7 @@ fn var_value(value_: &VarValue) -> String {
         VarValue::Bool(b) => b.to_string(),
         VarValue::Str(s) => q(s),
         VarValue::Object(r) => object_ref(r),
-        VarValue::Vector(components) => vector(components, ","),
+        VarValue::Vector(components) => vector(components),
         VarValue::Enum(i) => format!("enum({i})"),
         VarValue::Array(a) => array_value(a),
     }
@@ -324,9 +324,9 @@ fn num(f: f32) -> String {
     format!("{f}")
 }
 
-fn vector(components: &[f32], separator: &str) -> String {
+fn vector(components: &[f32]) -> String {
     let parts: Vec<String> = components.iter().copied().map(num).collect();
-    format!("({})", parts.join(separator))
+    format!("({})", parts.join(", "))
 }
 
 #[cfg(test)]
@@ -468,7 +468,7 @@ mod tests {
             "\n",
             "  state Init {\n",
             "    SetBoolValue(boolVariable=var \"On\", boolValue=true, finishEvent=(none), ",
-            "target=Self, colour=(1, 0.5, 0), offset=(1,2), ",
+            "target=Self, colour=(1, 0.5, 0), offset=(1, 2), ",
             "property=Transform.position on var \"Target\", curve=curve[0:1], parameters=[3], ",
             "sendTo=GameObjectFSM(var \"Bell\", fsm=\"Control\"))  // arm the bell\n",
             "    on FINISHED → Idle\n",
