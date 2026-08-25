@@ -163,7 +163,12 @@ impl<'a, R: EnvResolver, P: TypeTreeProvider> Context<'a, R, P> {
                 .as_deref()
                 .unwrap_or_default()
                 .iter()
-                .map(|e| (e.fromEvent.name.as_str(), e.toEvent.name.as_str()))
+                .map(|e| {
+                    (
+                        e.fromEvent.name.as_str().into(),
+                        e.toEvent.name.as_str().into(),
+                    )
+                })
                 .collect(),
         }
     }
@@ -311,13 +316,13 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
     ctx: &mut Context<'_, R, P>,
 ) -> FsmModel<'a> {
     FsmModel {
-        name: &fsm.name,
-        start_state: &fsm.startState,
+        name: fsm.name.as_str().into(),
+        start_state: fsm.startState.as_str().into(),
         events: fsm
             .events
             .iter()
             .map(|e| Event {
-                name: &e.name,
+                name: e.name.as_str().into(),
                 is_global: e.isGlobal != 0,
                 is_system: e.isSystemEvent != 0,
             })
@@ -334,8 +339,8 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
 
 fn transition(t: &FsmTransition) -> Transition<'_> {
     Transition {
-        event: &t.fsmEvent.name,
-        to_state: &t.toState,
+        event: t.fsmEvent.name.as_str().into(),
+        to_state: t.toState.as_str().into(),
     }
 }
 
@@ -351,18 +356,18 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
         .iter()
         .enumerate()
         .map(|(ai, cls)| Action {
-            class: cls,
+            class: cls.as_str().into(),
             custom_name: ad
                 .customNames
                 .get(ai)
                 .filter(|c| !c.is_empty())
-                .map(String::as_str),
+                .map(|c| c.as_str().into()),
             enabled: ad.actionEnabled.get(ai) != Some(&0),
             params: decode_params(ad, ai, version, &mut *ctx),
         })
         .collect();
     State {
-        name: &s.name,
+        name: s.name.as_str().into(),
         is_start: s.name == start,
         color_index: s.colorIndex,
         position: StatePos {
@@ -440,8 +445,8 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
         decode_param(ad, type_name, pos, size, version, ctx)
     };
     Some(Param {
-        name,
-        type_name,
+        name: name.into(),
+        type_name: type_name.into(),
         value,
     })
 }
@@ -496,8 +501,8 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
             .map(|t| ParamValue::EventTarget(ctx.event_target(t))),
         "FunctionCall" => ad.functionCallParams.get(pos).map(|f| {
             ParamValue::Function(Call {
-                function: &f.FunctionName,
-                parameter_type: &f.parameterType,
+                function: f.FunctionName.as_str().into(),
+                parameter_type: f.parameterType.as_str().into(),
                 value: ctx.fn_param(f),
             })
         }),
@@ -584,8 +589,8 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
                     &p.TargetObject.name,
                     p.TargetObject.value,
                 ),
-                type_name: &p.TargetTypeName,
-                property: &p.PropertyName,
+                type_name: p.TargetTypeName.as_str().into(),
+                property: p.PropertyName.as_str().into(),
                 set: p.setProperty != 0,
             })
         }),
@@ -607,7 +612,7 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
         })),
         _ => None,
     };
-    decoded.unwrap_or_else(|| ParamValue::Raw(byte_slice(bd, pos, size)))
+    decoded.unwrap_or_else(|| ParamValue::Raw(byte_slice(bd, pos, size).into()))
 }
 
 /// Normalize a typed-array Fsm scalar/value wrapper: a variable binding becomes [`ParamValue::PackedVar`]
@@ -683,7 +688,7 @@ fn packed_scalar(bd: &[u8], pos: usize, size: usize, kind: Packed) -> ParamValue
         return ParamValue::PackedVar(name);
     }
     if size < valsize {
-        return ParamValue::Raw(byte_slice(bd, pos, size));
+        return ParamValue::Raw(byte_slice(bd, pos, size).into());
     }
     match kind {
         Packed::Bool => ParamValue::Bool(bd.get(pos).copied().unwrap_or(0) != 0),
@@ -699,7 +704,7 @@ fn packed_vec(bd: &[u8], pos: usize, size: usize, n: usize) -> ParamValue<'_> {
         return ParamValue::PackedVar(name);
     }
     if size < valsize {
-        return ParamValue::Raw(byte_slice(bd, pos, size));
+        return ParamValue::Raw(byte_slice(bd, pos, size).into());
     }
     let comps = (0..n)
         .map(|i| read_f32(bd, pos + i * 4).unwrap_or(0.0))
@@ -775,7 +780,11 @@ fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
         ($field:ident, $label:literal, |$x:ident| $value:expr) => {
             for $x in &v.$field {
                 if !$x.name.is_empty() {
-                    out.push(Variable { name: &$x.name, category: $label, value: $value });
+                    out.push(Variable {
+                        name: $x.name.as_str().into(),
+                        category: $label.into(),
+                        value: $value,
+                    });
                 }
             }
         };
@@ -784,7 +793,9 @@ fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
     push!(intVariables, "int", |x| Value::Int(x.value));
     push!(boolVariables, "bool", |x| Value::Bool(x.value != 0));
     push!(stringVariables, "string", |x| Value::Str(x.value.clone()));
-    push!(vector2Variables, "vector2", |x| Value::Vector(vec![x.value.x, x.value.y]));
+    push!(vector2Variables, "vector2", |x| Value::Vector(vec![
+        x.value.x, x.value.y
+    ]));
     push!(vector3Variables, "vector3", |x| Value::Vector(vec![
         x.value.x, x.value.y, x.value.z
     ]));
@@ -800,11 +811,21 @@ fn decode_variables<'a, R: EnvResolver, P: TypeTreeProvider>(
     push!(quaternionVariables, "quaternion", |x| Value::Vector(vec![
         x.value.x, x.value.y, x.value.z, x.value.w
     ]));
-    push!(gameObjectVariables, "gameObject", |x| Value::Object(ctx.resolve(x.value)));
-    push!(objectVariables, "object", |x| Value::Object(ctx.resolve(x.value)));
-    push!(materialVariables, "material", |x| Value::Object(ctx.resolve(x.value)));
-    push!(textureVariables, "texture", |x| Value::Object(ctx.resolve(x.value)));
-    push!(arrayVariables, "array", |x| Value::Array(ctx.array_value(x)));
+    push!(gameObjectVariables, "gameObject", |x| Value::Object(
+        ctx.resolve(x.value)
+    ));
+    push!(objectVariables, "object", |x| Value::Object(
+        ctx.resolve(x.value)
+    ));
+    push!(materialVariables, "material", |x| Value::Object(
+        ctx.resolve(x.value)
+    ));
+    push!(textureVariables, "texture", |x| Value::Object(
+        ctx.resolve(x.value)
+    ));
+    push!(arrayVariables, "array", |x| Value::Array(
+        ctx.array_value(x)
+    ));
     push!(enumVariables, "enum", |x| Value::Enum {
         enum_name: x.enumName.clone(),
         value: x.intValue,

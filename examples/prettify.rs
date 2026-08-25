@@ -57,7 +57,7 @@ pub fn prettify_model(m: &FsmModel) -> String {
                 (false, true) => "  (system)",
                 (false, false) => "",
             };
-            let _ = writeln!(o, "  {}{}", event(e.name), dim(flags));
+            let _ = writeln!(o, "  {}{}", event(&e.name), dim(flags));
         }
     }
 
@@ -80,7 +80,7 @@ pub fn prettify_model(m: &FsmModel) -> String {
                 o,
                 "  {} {} = {}",
                 dim(&format!("({})", v.category)),
-                var(v.name),
+                var(&v.name),
                 fmt_call_value(&v.value)
             );
         }
@@ -92,20 +92,20 @@ fn write_transition(o: &mut String, t: &Transition) {
     let _ = writeln!(
         o,
         "  on {} -> {}",
-        event(&q(t.event)),
-        state(&q(t.to_state))
+        event(&q(&t.event)),
+        state(&q(&t.to_state))
     );
 }
 
 fn write_state(o: &mut String, s: &State) {
     let mark = if s.is_start { "*" } else { " " };
-    let _ = writeln!(o, "\n {}[{}]", mark, state(s.name));
+    let _ = writeln!(o, "\n {}[{}]", mark, state(&s.name));
     for t in &s.transitions {
         let _ = writeln!(
             o,
             "      on {} -> {}",
-            event(&q(t.event)),
-            state(&q(t.to_state))
+            event(&q(&t.event)),
+            state(&q(&t.to_state))
         );
     }
     for a in &s.actions {
@@ -118,23 +118,24 @@ fn write_action(o: &mut String, a: &Action) {
     // a user-given label that differs from the class name is worth surfacing.
     let custom = a
         .custom_name
-        .filter(|c| *c != short(a.class))
+        .as_deref()
+        .filter(|c| *c != short(&a.class))
         .map(|c| format!("  {}", dim(&format!("\"{c}\""))))
         .unwrap_or_default();
-    let _ = writeln!(o, "      · {}{}{}", action(short(a.class)), custom, dis);
+    let _ = writeln!(o, "      · {}{}{}", action(short(&a.class)), custom, dis);
     for p in &a.params {
         write_param(o, p, 1);
     }
 }
 
 fn write_param(o: &mut String, p: &playmakerfsm::model::Param, depth: usize) {
-    let s = fmt_value(&p.value, p.type_name);
+    let s = fmt_value(&p.value, &p.type_name);
     let colored = match &p.value {
         ParamValue::Event(Some(_)) => event(&s),
         _ if s.starts_with("var ") => var(&s),
         _ => s,
     };
-    let name = if p.name.is_empty() { "·" } else { p.name };
+    let name = if p.name.is_empty() { "·" } else { &p.name };
     let indent = "    ".repeat(depth + 1);
     let _ = writeln!(
         o,
@@ -335,7 +336,7 @@ fn fmt_array(a: &ArrayValue) -> String {
     }
 }
 fn fmt_property(p: &Property) -> String {
-    let ty = short(p.type_name);
+    let ty = short(&p.type_name);
     if p.property.is_empty() {
         ty.to_string()
     } else {

@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         by_file.entry(&r.file).or_default().push(r.path_id);
     }
 
-    let mut per_type: BTreeMap<&'static str, Stat> = BTreeMap::new();
+    let mut per_type: BTreeMap<String, Stat> = BTreeMap::new();
     let mut unknown_ords: BTreeMap<i32, usize> = BTreeMap::new();
     let (mut bundles_ok, mut bundles_err) = (0usize, 0usize);
     let (mut fsms_ok, mut fsms_err) = (0usize, 0usize);
@@ -74,7 +74,7 @@ fn main() -> Result<()> {
             for state in &model.states {
                 for action in &state.actions {
                     for p in &action.params {
-                        let stat = per_type.entry(p.type_name).or_default();
+                        let stat = per_type.entry(p.type_name.to_string()).or_default();
                         stat.total += 1;
                         if matches!(p.value, ParamValue::Raw(_)) {
                             stat.raw += 1;
