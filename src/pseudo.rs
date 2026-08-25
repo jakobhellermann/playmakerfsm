@@ -5,9 +5,11 @@
 //! `paramDataType` / `paramDataPos` arrays plus a `byteData` blob, sliced per
 //! action by `actionStartIndex`. [`crate::model`] decodes that back into a
 //! typed model; this module turns the model into a state/transition/action
-//! listing:
+//! listing, with the variables last in two paragraphs — the ones the PlayMaker
+//! inspector exposes first:
 //!
 //! ```text
+//! // uses template: bell_shrine
 //! fsm Bell Shrine {
 //!   start Init
 //!   on RESET → Init  // from any state
@@ -16,6 +18,8 @@
 //!     SetBoolValue(boolVariable=var "Activated", boolValue=true)
 //!     on FINISHED → Idle
 //!   }
+//!
+//!   var Activated: bool = false
 //! }
 //! ```
 
@@ -24,7 +28,7 @@ use std::fmt::Write as _;
 use crate::model::{
     Action, ArrayValue, Call, Curve, EnumValue, EventTarget, FsmModel, GoRef, ObjectRef, Param,
     ParamValue, Property, RefTarget, StrValue, TemplateControl, Transition, Value, VarOverride,
-    VarValue,
+    VarValue, Variable,
 };
 
 /// Render the whole FSM. Ends with a newline.
@@ -38,8 +42,12 @@ pub fn render(model: &FsmModel<'_>) -> String {
         out.push('\n');
     };
 
+    if let Some(template) = &model.template_name {
+        line(0, &format!("// uses template: {template}"));
+    }
     line(0, &format!("fsm {} {{", model.name));
     line(1, &format!("start {}", model.start_state));
+
     for transition in &model.global_transitions {
         line(
             1,
@@ -59,8 +67,34 @@ pub fn render(model: &FsmModel<'_>) -> String {
         line(1, "}");
     }
 
+    // Inspector-exposed first, in their own paragraph: those are the ones an
+    // instance of a template can set, so they are where two instances differ.
+    for exposed in [true, false] {
+        let group = model
+            .variables
+            .iter()
+            .filter(|v| v.show_in_inspector == exposed);
+        let mut any = false;
+        for variable in group {
+            if !any {
+                line(0, "");
+                any = true;
+            }
+            line(1, &var_decl(variable));
+        }
+    }
+
     line(0, "}");
     out
+}
+
+fn var_decl(variable: &Variable<'_>) -> String {
+    format!(
+        "var {}: {} = {}",
+        variable.name,
+        variable.category,
+        value(&variable.value)
+    )
 }
 
 fn transition_text(transition: &Transition<'_>) -> String {
@@ -348,13 +382,27 @@ mod tests {
     fn renders_the_documented_layout() {
         let model = FsmModel {
             name: "Bell Shrine".into(),
+            template_name: Some("bell_shrine".into()),
             start_state: "Init".into(),
             events: Vec::new(),
             global_transitions: vec![Transition {
                 event: "RESET".into(),
                 to_state: "Init".into(),
             }],
-            variables: Vec::new(),
+            variables: vec![
+                Variable {
+                    name: "On".into(),
+                    category: "bool".into(),
+                    show_in_inspector: true,
+                    value: Value::Bool(false),
+                },
+                Variable {
+                    name: "Ticks".into(),
+                    category: "int".into(),
+                    show_in_inspector: false,
+                    value: Value::Int(3),
+                },
+            ],
             states: vec![
                 State {
                     name: "Init".into(),
@@ -462,6 +510,7 @@ mod tests {
         };
 
         let expected = concat!(
+            "// uses template: bell_shrine\n",
             "fsm Bell Shrine {\n",
             "  start Init\n",
             "  on RESET → Init  // from any state\n",
@@ -478,6 +527,10 @@ mod tests {
             "    SendEvent(value=(3B))  // disabled\n",
             "    SetFsmBool()\n",
             "  }\n",
+            "\n",
+            "  var On: bool = false\n",
+            "\n",
+            "  var Ticks: int = 3\n",
             "}\n",
         );
         assert_eq!(render(&model), expected);
