@@ -319,6 +319,8 @@ pub fn decode_fsm<'a, R: EnvResolver, P: TypeTreeProvider>(
 ) -> FsmModel<'a> {
     FsmModel {
         name: fsm.name.as_str().into(),
+        // only a component carries the enabled flag
+        enabled: true,
         // only a component knows whether it runs a template
         template_name: None,
         start_state: fsm.startState.as_str().into(),
@@ -376,6 +378,7 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
     State {
         name: s.name.as_str().into(),
         is_start: s.name == start,
+        is_sequence: s.isSequence != 0,
         color_index: s.colorIndex,
         position: StatePos {
             x: s.position.x,

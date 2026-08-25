@@ -172,6 +172,9 @@ pub struct VarOverride {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FsmModel<'a> {
     pub name: Cow<'a, str>,
+    /// `m_Enabled` of the component: a disabled one never gets `Start()` or
+    /// `Update()`, so its FSM stands still until something enables it.
+    pub enabled: bool,
     /// `m_Name` of the `FsmTemplate` this FSM was built from, if any. The states
     /// and actions below are then the template's, and only the name and the
     /// inspector-exposed variables come from the component running it.
@@ -214,6 +217,9 @@ pub struct StatePos {
 pub struct State<'a> {
     pub name: Cow<'a, str>,
     pub is_start: bool,
+    /// Actions run one after another, each blocking until it finishes, instead
+    /// of all starting together on entry.
+    pub is_sequence: bool,
     /// Author-assigned PlayMaker colour group (0..=7 palette index; used only for display).
     pub color_index: u8,
     pub position: StatePos,
@@ -351,6 +357,7 @@ mod tests {
             target,
         };
         FsmModel {
+            enabled: true,
             name: "Bench Control".into(),
             template_name: Some("bench_control".into()),
             start_state: "Init".into(),
@@ -370,6 +377,7 @@ mod tests {
                 value: Value::Bool(false),
             }],
             states: vec![State {
+                is_sequence: false,
                 name: "Init".into(),
                 is_start: true,
                 color_index: 0,

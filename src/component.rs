@@ -51,6 +51,15 @@ impl ComponentFsm {
         &self,
         file: &SerializedFileHandle<'_, R, P>,
     ) -> Result<FsmModel<'_>> {
+        let mut model = self.decode_fsm_data(file)?;
+        model.enabled = self.component.m_Enabled != 0;
+        Ok(model)
+    }
+
+    fn decode_fsm_data<R: EnvResolver, P: TypeTreeProvider>(
+        &self,
+        file: &SerializedFileHandle<'_, R, P>,
+    ) -> Result<FsmModel<'_>> {
         let Some(template) = &self.template else {
             return Ok(decode_fsm(&self.component.fsm, &mut Context::new(file)));
         };

@@ -42,6 +42,12 @@ pub fn render(model: &FsmModel<'_>) -> String {
         out.push('\n');
     };
 
+    if !model.enabled {
+        line(
+            0,
+            "// component disabled: this FSM does not run until something enables it",
+        );
+    }
     if let Some(template) = &model.template_name {
         line(0, &format!("// uses template: {template}"));
     }
@@ -57,7 +63,12 @@ pub fn render(model: &FsmModel<'_>) -> String {
 
     for state in &model.states {
         line(0, "");
-        line(1, &format!("state {} {{", state.name));
+        let kind = if state.is_sequence {
+            "sequence state"
+        } else {
+            "state"
+        };
+        line(1, &format!("{kind} {} {{", state.name));
         for action in &state.actions {
             line(2, &action_text(action));
         }
@@ -400,11 +411,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_disabled_component_is_marked() {
+        let model = FsmModel {
+            name: "Bell Shrine".into(),
+            enabled: false,
+            template_name: None,
+            start_state: "Init".into(),
+            events: Vec::new(),
+            global_transitions: Vec::new(),
+            states: Vec::new(),
+            variables: Vec::new(),
+        };
+        assert_eq!(
+            render(&model),
+            concat!(
+                "// component disabled: this FSM does not run until something enables it\n",
+                "fsm Bell Shrine {\n",
+                "  start Init\n",
+                "}\n",
+            )
+        );
+    }
+
     /// The expected text is the format's specification.
     #[test]
     fn renders_the_documented_layout() {
         let model = FsmModel {
             name: "Bell Shrine".into(),
+            enabled: true,
             template_name: Some("bell_shrine".into()),
             start_state: "Init".into(),
             events: Vec::new(),
@@ -430,6 +465,7 @@ mod tests {
                 State {
                     name: "Init".into(),
                     is_start: true,
+                    is_sequence: false,
                     color_index: 0,
                     position: StatePos {
                         x: 0.0,
@@ -515,6 +551,7 @@ mod tests {
                 State {
                     name: "Idle".into(),
                     is_start: false,
+                    is_sequence: true,
                     color_index: 0,
                     position: StatePos {
                         x: 0.0,
@@ -557,7 +594,7 @@ mod tests {
             "    on FINISHED → Idle\n",
             "  }\n",
             "\n",
-            "  state Idle {\n",
+            "  sequence state Idle {\n",
             "    SendEvent(value=(3B))  // disabled\n",
             "    SetFsmBool()\n",
             "  }\n",
