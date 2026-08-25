@@ -22,7 +22,7 @@
 use std::fmt::Write as _;
 
 use crate::model::{
-    Action, ArrayValue, Call, EnumValue, EventTarget, FsmModel, GoRef, ObjectRef, Param,
+    Action, ArrayValue, Call, Curve, EnumValue, EventTarget, FsmModel, GoRef, ObjectRef, Param,
     ParamValue, Property, RefTarget, StrValue, TemplateControl, Transition, Value, VarOverride,
     VarValue,
 };
@@ -69,10 +69,29 @@ fn transition_text(transition: &Transition<'_>) -> String {
 
 fn action_text(action: &Action<'_>) -> String {
     let mut text = format!("{}({})", short(&action.class), params(&action.params));
+    let mut notes = Vec::new();
+    if let Some(label) = &action.custom_name
+        && !is_default_label(label, short(&action.class))
+    {
+        notes.push(label.as_ref());
+    }
     if !action.enabled {
-        text.push_str("  // disabled");
+        notes.push("disabled");
+    }
+    if !notes.is_empty() {
+        let _ = write!(text, "  // {}", notes.join(", "));
     }
     text
+}
+
+/// PlayMaker labels an action with its class name split at the capitals, so a
+/// label that collapses back to the class name carries nothing a reader of the
+/// class name doesn't already have.
+fn is_default_label(label: &str, class: &str) -> bool {
+    label
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .eq(class.chars())
 }
 
 fn params(params: &[Param<'_>]) -> String {
@@ -114,8 +133,8 @@ fn param_value(value_: &ParamValue<'_>) -> String {
         },
         ParamValue::Array(a) => array_value(a),
         ParamValue::Property(p) => property(p),
-        ParamValue::AnimCurve(c) => format!("curve[{} keys]", c.keys.len()),
-        ParamValue::List(items) => format!("[{} elems]", items.len()),
+        ParamValue::AnimCurve(c) => curve(c),
+        ParamValue::List(items) => format!("[{}]", params(items)),
         ParamValue::Pptr(r) => object_ref(r),
         // Params the decoder couldn't make sense of keep their byte length, so
         // a changed blob still shows up as a change.
@@ -171,7 +190,10 @@ fn enum_value(value_: &EnumValue) -> String {
 fn array_value(value_: &ArrayValue) -> String {
     match value_ {
         ArrayValue::Var(name) => format!("var {}", q(name)),
-        ArrayValue::Values(values) => format!("array[{} elems]", values.len()),
+        ArrayValue::Values(values) => {
+            let elements: Vec<String> = values.iter().map(value).collect();
+            format!("[{}]", elements.join(", "))
+        }
     }
 }
 
@@ -236,11 +258,23 @@ fn function_call(call: &Call<'_>) -> String {
 }
 
 fn property(property: &Property<'_>) -> String {
-    if property.property.is_empty() {
+    let member = if property.property.is_empty() {
         short(&property.type_name).to_string()
     } else {
         format!("{}.{}", short(&property.type_name), property.property)
-    }
+    };
+    format!("{member} on {}", go_ref(&property.target))
+}
+
+/// A curve as its `time:value` keys. Tangents and weights are left out: they
+/// shape the interpolation but say nothing about what the action does.
+fn curve(curve: &Curve) -> String {
+    let keys: Vec<String> = curve
+        .keys
+        .iter()
+        .map(|k| format!("{}:{}", num(k.time), num(k.value)))
+        .collect();
+    format!("curve[{}]", keys.join(", "))
 }
 
 fn template_control(control: &TemplateControl<'_>) -> String {
@@ -338,7 +372,6 @@ mod tests {
                     }],
                     actions: vec![Action {
                         class: "HutongGames.PlayMaker.Actions.SetBoolValue".into(),
-                        // a user-given label is not part of the format
                         custom_name: Some("arm the bell".into()),
                         enabled: true,
                         params: vec![
@@ -409,12 +442,21 @@ mod tests {
                         h: 0.0,
                     },
                     transitions: Vec::new(),
-                    actions: vec![Action {
-                        class: "HutongGames.PlayMaker.Actions.SendEvent".into(),
-                        custom_name: None,
-                        enabled: false,
-                        params: vec![param("value", ParamValue::Raw(vec![1, 2, 3].into()))],
-                    }],
+                    actions: vec![
+                        Action {
+                            class: "HutongGames.PlayMaker.Actions.SendEvent".into(),
+                            custom_name: None,
+                            enabled: false,
+                            params: vec![param("value", ParamValue::Raw(vec![1, 2, 3].into()))],
+                        },
+                        Action {
+                            class: "HutongGames.PlayMaker.Actions.SetFsmBool".into(),
+                            // PlayMaker's own label for the class, so it is dropped
+                            custom_name: Some("Set Fsm Bool".into()),
+                            enabled: true,
+                            params: Vec::new(),
+                        },
+                    ],
                 },
             ],
         };
@@ -426,14 +468,15 @@ mod tests {
             "\n",
             "  state Init {\n",
             "    SetBoolValue(boolVariable=var \"On\", boolValue=true, finishEvent=(none), ",
-            "target=Self, colour=(1, 0.5, 0), offset=(1,2), property=Transform.position, ",
-            "curve=curve[1 keys], parameters=[1 elems], ",
-            "sendTo=GameObjectFSM(var \"Bell\", fsm=\"Control\"))\n",
+            "target=Self, colour=(1, 0.5, 0), offset=(1,2), ",
+            "property=Transform.position on var \"Target\", curve=curve[0:1], parameters=[3], ",
+            "sendTo=GameObjectFSM(var \"Bell\", fsm=\"Control\"))  // arm the bell\n",
             "    on FINISHED → Idle\n",
             "  }\n",
             "\n",
             "  state Idle {\n",
             "    SendEvent(value=(3B))  // disabled\n",
+            "    SetFsmBool()\n",
             "  }\n",
             "}\n",
         );
