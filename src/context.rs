@@ -6,14 +6,10 @@
 //! - **Enums.** A generic `Enum` param is a plain int whose type is implied by
 //!   the action class plus field name. A typed `FsmEnum` param does carry its
 //!   enum type's full name (`…Actions.HeroBoxControl+HeroBoxState`) but still
-//!   only a number. Both resolve against the enum definitions in
-//!   `Assembly-CSharp.dll`.
+//!   only a number.
 //! - **Layers.** PlayMaker tags layer fields with `[UIHint(UIHint.Layer)]`, so
 //!   which params are layers comes from the assemblies, while the
 //!   `index → name` table comes from the `TagManager`.
-//!
-//! Both assemblies are required: failing is better than rendering every enum
-//! as a number and calling it a result.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -50,9 +46,12 @@ pub struct GameContext {
 }
 
 impl GameContext {
+    /// `assemblies` hold the action classes and enums, named for error
+    /// reporting. A class none of them defines keeps its enum and layer params
+    /// numeric.
     pub fn new(
         playmaker_dll: &[u8],
-        assembly_csharp: &[u8],
+        assemblies: &[(&str, &[u8])],
         layer_names: Vec<String>,
     ) -> Result<Self> {
         let mut context = GameContext {
@@ -60,12 +59,13 @@ impl GameContext {
             ..Default::default()
         };
 
-        let assembly_csharp = parse(assembly_csharp).context("Assembly-CSharp.dll")?;
-        context.collect_enums(&assembly_csharp);
-
-        // The `UIHint` enum lives in PlayMaker.dll, so attribute blobs in both
-        // assemblies are decoded against it.
         let playmaker = parse(playmaker_dll).context("PlayMaker.dll")?;
+        let others = assemblies
+            .iter()
+            .map(|(name, bytes)| parse(bytes).with_context(|| name.to_string()))
+            .collect::<Result<Vec<_>>>()?;
+        let all: Vec<&Resolution> = std::iter::once(&playmaker).chain(others.iter()).collect();
+
         let by_name = playmaker
             .enumerate_type_definitions()
             .map(|(idx, td)| (td.type_name(), idx))
@@ -74,8 +74,10 @@ impl GameContext {
             res: &playmaker,
             by_name,
         };
-        context.collect_layer_fields(&playmaker, &resolver);
-        context.collect_layer_fields(&assembly_csharp, &resolver);
+        for res in &all {
+            context.collect_enums(res);
+            context.collect_layer_fields(res, &resolver);
+        }
 
         Ok(context)
     }
