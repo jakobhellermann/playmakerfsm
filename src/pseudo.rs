@@ -113,10 +113,16 @@ fn transition_text(transition: &Transition<'_>) -> String {
 }
 
 fn action_text(action: &Action<'_>) -> String {
-    let mut text = format!("{}({})", short(&action.class), params(&action.params));
+    // an empty actionNames entry is a deleted script: PlayMaker substitutes a
+    // MissingAction, and the name it was saved under is nowhere in the data
+    let class = match action.class.is_empty() {
+        true => "<deleted action>",
+        false => short(&action.class),
+    };
+    let mut text = format!("{class}({})", params(&action.params));
     let mut notes = Vec::new();
     if let Some(label) = &action.custom_name
-        && !is_default_label(label, short(&action.class))
+        && !is_default_label(label, class)
     {
         notes.push(label.as_ref());
     }

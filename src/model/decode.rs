@@ -372,7 +372,13 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
                 .filter(|c| !c.is_empty() && *c != "~AutoName")
                 .map(|c| c.as_str().into()),
             enabled: ad.actionEnabled.get(ai) != Some(&0),
-            params: decode_params(ad, ai, version, &mut *ctx),
+            // An action with no class name is one whose script is gone:
+            // `GetActionType` returns null, PlayMaker substitutes a MissingAction
+            // and loads no param at all. Its start index is a leftover 0.
+            params: match cls.is_empty() {
+                true => Vec::new(),
+                false => decode_params(ad, ai, version, &mut *ctx),
+            },
         })
         .collect();
     State {
@@ -394,25 +400,28 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
 /// Decode action `ai`'s parameter slice into typed [`Param`]s.
 fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
     ad: &'a ActionData,
-    ai: usize,
+    action_index: usize,
     version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> Vec<Param<'a>> {
     let starts = &ad.actionStartIndex;
-    let Some(&lo) = starts.get(ai) else {
+    let Some(&start) = starts.get(action_index) else {
         return vec![];
     };
-    // actionStartIndex has no end sentinel: the last action's params run to the end of the arrays.
-    let hi = starts
-        .get(ai + 1)
-        .map(|&x| x as usize)
-        .unwrap_or(ad.paramName.len());
+    // `SaveActions` writes the arrays action by action, so an action's params run
+    // up to where the next action starts, and the last action's to the end of the
+    // arrays. Entries without a class name never went through it and carry a
+    // leftover start index of 0, which would cut their predecessor short.
+    let start = start as usize;
+    let end = (action_index + 1..starts.len())
+        .find(|&next| !ad.actionNames[next].is_empty())
+        .map_or(ad.paramName.len(), |next| starts[next] as usize);
 
     let mut out = Vec::new();
-    let mut j = lo as usize;
-    while j < hi {
+    let mut j = start;
+    while j < end {
         let before = j;
-        match decode_one(ad, &mut j, hi, version, ctx) {
+        match decode_one(ad, &mut j, end, version, ctx) {
             Some(p) => out.push(p),
             None => break,
         }
@@ -429,7 +438,7 @@ fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
 fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
     ad: &'a ActionData,
     j: &mut usize,
-    hi: usize,
+    end: usize,
     version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> Option<Param<'a>> {
@@ -444,10 +453,10 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
         let n = ad.arrayParamSizes.get(pos).copied().unwrap_or(0).max(0) as usize;
         let mut elems = Vec::with_capacity(n);
         for _ in 0..n {
-            if *j >= hi {
+            if *j >= end {
                 break;
             }
-            if let Some(child) = decode_one(ad, j, hi, version, ctx) {
+            if let Some(child) = decode_one(ad, j, end, version, ctx) {
                 elems.push(child);
             }
         }
@@ -463,10 +472,10 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
         let mut fields = Vec::with_capacity(n);
         for _ in 0..n {
             assert!(
-                *j < hi,
+                *j < end,
                 "class {class:?} declares {n} fields, which run past the action's params"
             );
-            if let Some(child) = decode_one(ad, j, hi, version, ctx) {
+            if let Some(child) = decode_one(ad, j, end, version, ctx) {
                 fields.push(child);
             }
         }
