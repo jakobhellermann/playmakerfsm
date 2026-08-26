@@ -85,7 +85,7 @@ fn main() -> Result<()> {
     let census = Mutex::new(Census::default());
     sources.par_iter().try_for_each(|source| -> Result<()> {
         let mut local = Census::default();
-        files::for_each_file(&env, source, |_, handle| {
+        source.for_each_file(&env, |handle| {
             let mut ctx = Context::new(handle);
             // Components hold the FSM they run; templates hold FSMs that only a
             // RunFSM action instantiates, and no component data covers those.
