@@ -356,8 +356,8 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
     version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> State<'a> {
-    let ad = &s.actionData;
-    let actions = ad
+    let action_data = &s.actionData;
+    let actions = action_data
         .actionNames
         .iter()
         .enumerate()
@@ -366,18 +366,18 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
             // `ActionData` stores `~AutoName` for an action the editor names
             // after its class (`autoNameString`), so that is the absence of a
             // custom name rather than one.
-            custom_name: ad
+            custom_name: action_data
                 .customNames
                 .get(ai)
                 .filter(|c| !c.is_empty() && *c != "~AutoName")
                 .map(|c| c.as_str().into()),
-            enabled: ad.actionEnabled.get(ai) != Some(&0),
+            enabled: action_data.actionEnabled.get(ai) != Some(&0),
             // An action with no class name is one whose script is gone:
             // `GetActionType` returns null, PlayMaker substitutes a MissingAction
             // and loads no param at all. Its start index is a leftover 0.
             params: match cls.is_empty() {
                 true => Vec::new(),
-                false => decode_params(ad, ai, version, &mut *ctx),
+                false => decode_params(action_data, ai, version, &mut *ctx),
             },
         })
         .collect();
@@ -397,14 +397,14 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
     }
 }
 
-/// Decode action `ai`'s parameter slice into typed [`Param`]s.
+/// Decode one action's parameter slice into typed [`Param`]s.
 fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
-    ad: &'a ActionData,
+    action_data: &'a ActionData,
     action_index: usize,
     version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> Vec<Param<'a>> {
-    let starts = &ad.actionStartIndex;
+    let starts = &action_data.actionStartIndex;
     let Some(&start) = starts.get(action_index) else {
         return vec![];
     };
@@ -414,14 +414,14 @@ fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
     // leftover start index of 0, which would cut their predecessor short.
     let start = start as usize;
     let end = (action_index + 1..starts.len())
-        .find(|&next| !ad.actionNames[next].is_empty())
-        .map_or(ad.paramName.len(), |next| starts[next] as usize);
+        .find(|&next| !action_data.actionNames[next].is_empty())
+        .map_or(action_data.paramName.len(), |next| starts[next] as usize);
 
     let mut out = Vec::new();
     let mut j = start;
     while j < end {
         let before = j;
-        match decode_one(ad, &mut j, end, version, ctx) {
+        match decode_one(action_data, &mut j, end, version, ctx) {
             Some(p) => out.push(p),
             None => break,
         }
@@ -436,27 +436,36 @@ fn decode_params<'a, R: EnvResolver, P: TypeTreeProvider>(
 /// following entries as its elements, a `CustomClass` param the `N` following entries as its
 /// fields.
 fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
-    ad: &'a ActionData,
+    action_data: &'a ActionData,
     j: &mut usize,
     end: usize,
     version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> Option<Param<'a>> {
-    let dt = *ad.paramDataType.get(*j)?;
-    let pos = *ad.paramDataPos.get(*j)? as usize;
-    let size = ad.paramByteDataSize.get(*j).copied().unwrap_or(0) as usize;
+    let dt = *action_data.paramDataType.get(*j)?;
+    let pos = *action_data.paramDataPos.get(*j)? as usize;
+    let size = action_data.paramByteDataSize.get(*j).copied().unwrap_or(0) as usize;
     let type_name = ptype(dt);
-    let name = ad.paramName.get(*j).map(String::as_str).unwrap_or("");
+    let name = action_data
+        .paramName
+        .get(*j)
+        .map(String::as_str)
+        .unwrap_or("");
     *j += 1;
 
     let value = if type_name == "Array" {
-        let n = ad.arrayParamSizes.get(pos).copied().unwrap_or(0).max(0) as usize;
+        let n = action_data
+            .arrayParamSizes
+            .get(pos)
+            .copied()
+            .unwrap_or(0)
+            .max(0) as usize;
         let mut elems = Vec::with_capacity(n);
         for _ in 0..n {
             if *j >= end {
                 break;
             }
-            if let Some(child) = decode_one(ad, j, end, version, ctx) {
+            if let Some(child) = decode_one(action_data, j, end, version, ctx) {
                 elems.push(child);
             }
         }
@@ -467,15 +476,15 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
         // and those can be nested classes themselves.
         // Indexed rather than probed: a miss would take zero fields and read this
         // class's own fields as its siblings, shifting every param after it.
-        let n = ad.customTypeSizes[pos].max(0) as usize;
-        let class = ad.customTypeNames[pos].as_str();
+        let n = action_data.customTypeSizes[pos].max(0) as usize;
+        let class = action_data.customTypeNames[pos].as_str();
         let mut fields = Vec::with_capacity(n);
         for _ in 0..n {
             assert!(
                 *j < end,
                 "class {class:?} declares {n} fields, which run past the action's params"
             );
-            if let Some(child) = decode_one(ad, j, end, version, ctx) {
+            if let Some(child) = decode_one(action_data, j, end, version, ctx) {
                 fields.push(child);
             }
         }
@@ -484,7 +493,7 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
             fields,
         }
     } else {
-        decode_param(ad, type_name, pos, size, version, ctx)
+        decode_param(action_data, type_name, pos, size, version, ctx)
     };
     Some(Param {
         name: name.into(),
@@ -494,16 +503,16 @@ fn decode_one<'a, R: EnvResolver, P: TypeTreeProvider>(
 }
 
 fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
-    ad: &'a ActionData,
+    action_data: &'a ActionData,
     type_name: &str,
     pos: usize,
     size: usize,
     version: i32,
     ctx: &mut Context<'_, R, P>,
 ) -> ParamValue<'a> {
-    let bd = &ad.byteData;
+    let bd = &action_data.byteData;
     let decoded = match type_name {
-        "FsmString" => ad
+        "FsmString" => action_data
             .fsmStringParams
             .get(pos)
             .map(|s| ParamValue::FsmString(str_value(s))),
@@ -513,7 +522,7 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
                 .into_owned()
                 .into(),
         )),
-        "String" if version > 1 => ad
+        "String" if version > 1 => action_data
             .stringParams
             .get(pos)
             .map(|s| ParamValue::Str(Cow::Borrowed(s))),
@@ -523,38 +532,38 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
         "Vector2" => raw_floats(bd, pos, 2),
         "Vector3" => raw_floats(bd, pos, 3),
         "Vector4" | "Color" | "Rect" | "Quaternion" => raw_floats(bd, pos, 4),
-        "FsmOwnerDefault" => ad
+        "FsmOwnerDefault" => action_data
             .fsmOwnerDefaultParams
             .get(pos)
             .map(|o| ParamValue::Owner(ctx.owner_ref(o))),
-        "FsmVar" => ad
+        "FsmVar" => action_data
             .fsmVarParams
             .get(pos)
             .map(|fv| ParamValue::Var(ctx.var_value(fv))),
-        "FsmGameObject" => ad
+        "FsmGameObject" => action_data
             .fsmGameObjectParams
             .get(pos)
             .map(|g| ParamValue::GameObject(ctx.go_ref(g.useVariable, &g.name, g.value))),
-        "FsmObject" | "FsmMaterial" | "FsmTexture" => ad
+        "FsmObject" | "FsmMaterial" | "FsmTexture" => action_data
             .fsmObjectParams
             .get(pos)
             .map(|o| ParamValue::Object(ctx.go_ref(o.useVariable, &o.name, o.value))),
-        "FsmEventTarget" => ad
+        "FsmEventTarget" => action_data
             .fsmEventTargetParams
             .get(pos)
             .map(|t| ParamValue::EventTarget(ctx.event_target(t))),
-        "FunctionCall" => ad.functionCallParams.get(pos).map(|f| {
+        "FunctionCall" => action_data.functionCallParams.get(pos).map(|f| {
             ParamValue::Function(Call {
                 function: f.FunctionName.as_str().into(),
                 parameter_type: f.parameterType.as_str().into(),
                 value: ctx.fn_param(f),
             })
         }),
-        "FsmTemplateControl" => ad
+        "FsmTemplateControl" => action_data
             .fsmTemplateControlParams
             .get(pos)
             .map(|t| ParamValue::Template(ctx.template_control(t))),
-        "ObjectReference" | "GameObject" => ad
+        "ObjectReference" | "GameObject" => action_data
             .unityObjectParams
             .get(pos)
             .map(|p| ParamValue::Pptr(ctx.resolve(*p))),
@@ -570,47 +579,47 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
         "FsmVector2" if size > 0 => Some(packed_vec(bd, pos, size, 2)),
         "FsmVector3" if size > 0 => Some(packed_vec(bd, pos, size, 3)),
         "FsmQuaternion" | "FsmColor" | "FsmRect" if size > 0 => Some(packed_vec(bd, pos, size, 4)),
-        "FsmBool" => ad
+        "FsmBool" => action_data
             .fsmBoolParams
             .get(pos)
             .map(|f| wrap(f.useVariable, &f.name, ParamValue::Bool(f.value != 0))),
-        "FsmInt" => ad
+        "FsmInt" => action_data
             .fsmIntParams
             .get(pos)
             .map(|f| wrap(f.useVariable, &f.name, ParamValue::Int(f.value))),
-        "FsmFloat" => ad
+        "FsmFloat" => action_data
             .fsmFloatParams
             .get(pos)
             .map(|f| wrap(f.useVariable, &f.name, ParamValue::Float(f.value))),
-        "FsmVector2" => ad.fsmVector2Params.get(pos).map(|v| {
+        "FsmVector2" => action_data.fsmVector2Params.get(pos).map(|v| {
             wrap(
                 v.useVariable,
                 &v.name,
                 ParamValue::Vector(vec![v.value.x, v.value.y]),
             )
         }),
-        "FsmVector3" => ad.fsmVector3Params.get(pos).map(|v| {
+        "FsmVector3" => action_data.fsmVector3Params.get(pos).map(|v| {
             wrap(
                 v.useVariable,
                 &v.name,
                 ParamValue::Vector(vec![v.value.x, v.value.y, v.value.z]),
             )
         }),
-        "FsmQuaternion" => ad.fsmQuaternionParams.get(pos).map(|v| {
+        "FsmQuaternion" => action_data.fsmQuaternionParams.get(pos).map(|v| {
             wrap(
                 v.useVariable,
                 &v.name,
                 ParamValue::Vector(vec![v.value.x, v.value.y, v.value.z, v.value.w]),
             )
         }),
-        "FsmColor" => ad.fsmColorParams.get(pos).map(|v| {
+        "FsmColor" => action_data.fsmColorParams.get(pos).map(|v| {
             wrap(
                 v.useVariable,
                 &v.name,
                 ParamValue::Vector(vec![v.value.r, v.value.g, v.value.b, v.value.a]),
             )
         }),
-        "FsmRect" => ad.fsmRectParams.get(pos).map(|v| {
+        "FsmRect" => action_data.fsmRectParams.get(pos).map(|v| {
             wrap(
                 v.useVariable,
                 &v.name,
@@ -618,15 +627,15 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
             )
         }),
         // these always use the typed param array (no byteData form).
-        "FsmEnum" => ad
+        "FsmEnum" => action_data
             .fsmEnumParams
             .get(pos)
             .map(|e| ParamValue::Enum(enum_value(e))),
-        "FsmArray" => ad
+        "FsmArray" => action_data
             .fsmArrayParams
             .get(pos)
             .map(|a| ParamValue::Array(ctx.array_value(a))),
-        "FsmProperty" => ad.fsmPropertyParams.get(pos).map(|p| {
+        "FsmProperty" => action_data.fsmPropertyParams.get(pos).map(|p| {
             ParamValue::Property(Property {
                 target: ctx.go_ref(
                     p.TargetObject.useVariable,
@@ -638,14 +647,15 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
                 set: p.setProperty != 0,
             })
         }),
-        "FsmAnimationCurve" => ad
+        "FsmAnimationCurve" => action_data
             .animationCurveParams
             .get(pos)
             .map(|c| ParamValue::AnimCurve(curve(c))),
         // FsmEvent: in dataVersion 1 the event name is packed into byteData; from version 2 on it
         // lives in `stringParams[pos]` (an empty entry means no event), like the raw `String` type.
         "FsmEvent" => Some(ParamValue::Event(if version > 1 {
-            ad.stringParams
+            action_data
+                .stringParams
                 .get(pos)
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
