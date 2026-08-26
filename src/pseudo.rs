@@ -484,6 +484,7 @@ mod tests {
                         to_state: "Idle".into(),
                     }],
                     actions: vec![Action {
+                        type_hash: 0,
                         class: "HutongGames.PlayMaker.Actions.SetBoolValue".into(),
                         custom_name: Some("arm the bell".into()),
                         enabled: true,
@@ -568,12 +569,14 @@ mod tests {
                     transitions: Vec::new(),
                     actions: vec![
                         Action {
+                            type_hash: 0,
                             class: "HutongGames.PlayMaker.Actions.SendEvent".into(),
                             custom_name: None,
                             enabled: false,
                             params: vec![param("value", ParamValue::Raw(vec![1, 2, 3].into()))],
                         },
                         Action {
+                            type_hash: 0,
                             class: "HutongGames.PlayMaker.Actions.SetFsmBool".into(),
                             // PlayMaker's own label for the class, so it is dropped
                             custom_name: Some("Set Fsm Bool".into()),

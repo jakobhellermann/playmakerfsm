@@ -372,6 +372,7 @@ fn decode_state<'a, R: EnvResolver, P: TypeTreeProvider>(
                 .filter(|c| !c.is_empty() && *c != "~AutoName")
                 .map(|c| c.as_str().into()),
             enabled: action_data.actionEnabled.get(ai) != Some(&0),
+            type_hash: action_data.actionHashCodes.get(ai).copied().unwrap_or(0),
             // An action with no class name is one whose script is gone:
             // `GetActionType` returns null, PlayMaker substitutes a MissingAction
             // and loads no param at all. Its start index is a leftover 0.

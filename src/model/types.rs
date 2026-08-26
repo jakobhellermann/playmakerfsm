@@ -234,6 +234,10 @@ pub struct Action<'a> {
     /// User-given label from the PlayMaker editor
     pub custom_name: Option<Cow<'a, str>>,
     pub enabled: bool,
+    /// `actionHashCodes`: the hash over the field *types* of the class as it was
+    /// when the FSM was saved. PlayMaker compares it against the class it finds
+    /// today to decide whether the params still line up with the fields.
+    pub type_hash: i32,
     pub params: Vec<Param<'a>>,
 }
 
@@ -392,6 +396,7 @@ mod tests {
                     to_state: "Idle".into(),
                 }],
                 actions: vec![Action {
+                    type_hash: 0,
                     class: "HutongGames.PlayMaker.Actions.SetBoolValue".into(),
                     custom_name: Some("arm the bell".into()),
                     enabled: false,
