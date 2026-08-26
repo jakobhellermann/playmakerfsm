@@ -504,10 +504,12 @@ fn decode_param<'a, R: EnvResolver, P: TypeTreeProvider>(
                 .into_owned()
                 .into(),
         )),
-        "String" => ad
+        "String" if version > 1 => ad
             .stringParams
             .get(pos)
             .map(|s| ParamValue::Str(Cow::Borrowed(s))),
+        // dataVersion 1 packs strings into byteData, where no bytes is the empty string
+        "String" => Some(ParamValue::Str(Cow::Borrowed(""))),
         // raw (non-Fsm) value types: plain floats packed in byteData, no useVariable byte.
         "Vector2" => raw_floats(bd, pos, 2),
         "Vector3" => raw_floats(bd, pos, 3),
