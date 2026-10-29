@@ -59,9 +59,12 @@ pub struct Fsm {
     pub handleJointBreak2D: u8,
     pub handleOnGUI: u8,
     pub handleFixedUpdate: u8,
+    #[serde(default)]
     pub handleLateUpdate: u8,
     pub handleApplicationEvents: u8,
+    #[serde(default)]
     pub handleUiEvents: i32,
+    #[serde(default)]
     pub handleLegacyNetworking: u8,
     pub handleAnimatorMove: u8,
     pub handleAnimatorIK: u8,
