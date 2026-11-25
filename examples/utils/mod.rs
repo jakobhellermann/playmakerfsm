@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
-use rabex::tpk::TpkTypeTreeBlob;
-use rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::Environment;
+use rabex_env::rabex::tpk::TpkTypeTreeBlob;
+use rabex_env::rabex::typetree::typetree_cache::sync::TypeTreeCache;
 use rabex_env::resolver::GameFiles;
 
 pub fn for_each_steam_game(mut f: impl FnMut(Environment) -> Result<()>) -> Result<()> {

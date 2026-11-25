@@ -10,7 +10,7 @@ use playmakerfsm::model::{
     VarOverride, VarValue, decode_fsm, longest_ascii_run,
 };
 use playmakerfsm::raw::*;
-use rabex::objects::pptr::PathId;
+use rabex_env::rabex::objects::pptr::PathId;
 
 mod utils;
 

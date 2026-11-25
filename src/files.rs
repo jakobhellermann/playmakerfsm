@@ -46,11 +46,11 @@ impl Source {
                     .with_context(|| format!("{} has no main serialized file", self.label()))?;
                 for entry in bundle.serialized_files() {
                     let archive_path = ArchivePath::new(&bundle_id, &entry.path);
-                    let data = bundle.read_at_entry(entry)?;
-                    let mut serialized = SerializedFile::from_reader(&mut Cursor::new(&data))?;
-                    serialized
-                        .m_UnityVersion
-                        .get_or_insert(env.unity_version()?.clone());
+                    let data = bundle.read_entry(entry)?.into_owned();
+                    let serialized = SerializedFile::from_reader_with_version(
+                        &mut Cursor::new(&data),
+                        env.unity_version()?,
+                    )?;
                     let handle =
                         env.insert_cache(archive_path.to_string().into(), serialized, data.into());
                     f(&handle)?;
